@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- DataReco app icon: a disk platter with one recovered (green) sector.
+       Regenerate the icon files with: npx tauri icon app-icon.svg -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22436b"/>
+      <stop offset="1" stop-color="#0f1f33"/>
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="208" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="340" fill="#dbe4ee"/>
+  <path d="M512 512 L512 172 A340 340 0 0 1 806.4 342 Z" fill="#2bb673"/>
+  <circle cx="512" cy="512" r="260" fill="none" stroke="#0f1f33" stroke-opacity="0.18" stroke-width="12"/>
+  <circle cx="512" cy="512" r="180" fill="none" stroke="#0f1f33" stroke-opacity="0.18" stroke-width="12"/>
+  <circle cx="512" cy="512" r="76" fill="#0f1f33"/>
+  <circle cx="512" cy="512" r="30" fill="#dbe4ee"/>
+</svg>

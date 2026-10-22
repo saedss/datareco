@@ -1,0 +1,13 @@
+[package]
+name = "datareco-io"
+description = "Disk and image-file access for DataReco: sector reads, caching, bad-sector handling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
