@@ -11,9 +11,11 @@ publish.workspace = true
 tauri-build.workspace = true
 
 [dependencies]
-tauri.workspace = true
+datareco-io.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-dialog.workspace = true
 
 [lints]
 workspace = true

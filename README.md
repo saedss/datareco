@@ -3,8 +3,31 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 0).** The project skeleton is in place; disk
-> access arrives in Phase 1. See the [roadmap](docs/ROADMAP.md).
+> **Status: early development (Phase 1).** DataReco can list your disks and volumes
+> and show any sector of a disk, volume or image file. The disk editor and recovery
+> come next; see the [roadmap](docs/ROADMAP.md).
+
+## Using it
+
+DataReco only reads. Windows lets programs read disks and volumes directly only
+when they run as administrator; image files work without. The desktop app offers
+**Restart as administrator** when it needs to.
+
+Desktop app: pick a disk, volume or image file on the left to see its sectors as
+hex and text. Page Up and Page Down move between sectors. `datareco-gui --open disk0`
+starts on a given source.
+
+Command line:
+
+```sh
+datareco disks                       # list physical disks and volumes
+datareco read disk0                  # sector 0 of the first disk (as administrator)
+datareco read C: --sector 1          # a sector of a volume
+datareco read backup.img -s 2048 -n 2  # two sectors of an image file
+```
+
+A source is `diskN`, a drive letter like `C:`, a volume path (`\\?\Volume{…}`),
+or an image file path.
 
 ## Safety first
 

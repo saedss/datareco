@@ -1,68 +1,118 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { api, AppInfo, DeviceList, toCommandError } from "./api";
+import { DeviceSidebar, Selection, findSelection, imageSelection } from "./components/DeviceSidebar";
+import { SectorView } from "./components/SectorView";
 import "./App.css";
 
-/** Mirrors `AppInfo` in src-tauri/src/main.rs. */
-type AppInfo = {
-  name: string;
-  version: string;
-  os: string;
-  arch: string;
-};
-
-type EngineState =
-  | { kind: "connecting" }
-  | { kind: "ready"; info: AppInfo }
-  | { kind: "error"; message: string };
+const IMAGE_FILTERS = [
+  { name: "Disk images", extensions: ["img", "dd", "raw", "bin", "ima", "iso"] },
+  { name: "All files", extensions: ["*"] },
+];
 
 function App() {
-  const [engine, setEngine] = useState<EngineState>({ kind: "connecting" });
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [devices, setDevices] = useState<DeviceList | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [images, setImages] = useState<string[]>([]);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [restartError, setRestartError] = useState<string | null>(null);
+
+  const refreshDevices = useCallback(() => {
+    setDevicesError(null);
+    api
+      .listDevices()
+      .then(setDevices)
+      .catch((e) => setDevicesError(toCommandError(e).message));
+  }, []);
 
   useEffect(() => {
-    invoke<AppInfo>("app_info")
-      .then((info) => setEngine({ kind: "ready", info }))
-      .catch((err) => setEngine({ kind: "error", message: String(err) }));
-  }, []);
+    api
+      .appInfo()
+      .then(setInfo)
+      .catch((e) => setEngineError(String(e)));
+    refreshDevices();
+  }, [refreshDevices]);
+
+  // Show the source passed with --open: images right away, disks and volumes
+  // once the device list has loaded (for their names).
+  const startSource = info?.startSource ?? null;
+  const startShown = useRef(false);
+  useEffect(() => {
+    if (!startSource || startShown.current) return;
+    if (startSource.startsWith("image:")) {
+      const path = startSource.slice("image:".length);
+      setImages((current) => (current.includes(path) ? current : [...current, path]));
+      setSelection(imageSelection(path));
+      startShown.current = true;
+    } else if (devices) {
+      setSelection(findSelection(startSource, devices) ?? { id: startSource, title: startSource, subtitle: "" });
+      startShown.current = true;
+    }
+  }, [startSource, devices]);
+
+  async function openImage() {
+    const path = await open({ title: "Open disk image", multiple: false, directory: false, filters: IMAGE_FILTERS });
+    if (typeof path !== "string") return;
+    setImages((current) => (current.includes(path) ? current : [...current, path]));
+    setSelection(imageSelection(path));
+  }
+
+  function restartAsAdmin() {
+    setRestartError(null);
+    api.restartAsAdmin(selection?.id ?? null).catch((e) => setRestartError(toCommandError(e).message));
+  }
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <h2 className="sidebar-title">Devices</h2>
-        <p className="sidebar-empty">Disk access isn't built yet.</p>
-      </aside>
+      <DeviceSidebar
+        devices={devices}
+        devicesError={devicesError}
+        images={images}
+        selectedId={selection?.id ?? null}
+        elevated={info?.elevated ?? false}
+        onSelect={setSelection}
+        onOpenImage={openImage}
+        onRefresh={refreshDevices}
+        onRestartAsAdmin={restartAsAdmin}
+      />
 
       <main className="workspace">
-        <div className="welcome">
-          <h1>DataReco</h1>
-          <p>Disk editor and data recovery</p>
-          <span className="badge" title="Nothing is ever written to your disks in this mode">
-            Read-only mode
-          </span>
-        </div>
+        {selection ? (
+          <SectorView
+            key={selection.id}
+            sourceId={selection.id}
+            title={selection.title}
+            subtitle={selection.subtitle}
+            onRestartAsAdmin={restartAsAdmin}
+          />
+        ) : (
+          <div className="welcome">
+            <h1>DataReco</h1>
+            <p>Pick a disk, volume or image file to look at its sectors.</p>
+            <span className="badge" title="Nothing is ever written to your disks in this mode">
+              Read-only mode
+            </span>
+          </div>
+        )}
       </main>
 
       <footer className="statusbar">
-        <StatusText engine={engine} />
+        {engineError ? (
+          <span className="error-text">Engine error: {engineError}</span>
+        ) : info ? (
+          <span>
+            {info.name} {info.version} · {info.os}/{info.arch} ·{" "}
+            {info.elevated ? "Administrator" : "Not administrator"}
+          </span>
+        ) : (
+          <span>Connecting to engine…</span>
+        )}
+        {restartError && <span className="error-text"> · Couldn't restart as administrator: {restartError}</span>}
       </footer>
     </div>
   );
-}
-
-function StatusText({ engine }: { engine: EngineState }) {
-  switch (engine.kind) {
-    case "connecting":
-      return <span>Connecting to engine…</span>;
-    case "error":
-      return <span className="status-error">Engine error: {engine.message}</span>;
-    case "ready": {
-      const { name, version, os, arch } = engine.info;
-      return (
-        <span>
-          {name} {version} · {os}/{arch}
-        </span>
-      );
-    }
-  }
 }
 
 export default App;

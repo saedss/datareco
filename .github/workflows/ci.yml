@@ -21,9 +21,18 @@ env:
 jobs:
   engine:
     name: Engine and CLI
+    # Tests read the disk images built by the test-images job.
+    needs: test-images
     runs-on: windows-latest
+    env:
+      # Fail, rather than skip, the image tests if the images are missing.
+      DATARECO_REQUIRE_TESTDATA: "1"
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: test-images
+          path: testdata/out
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
