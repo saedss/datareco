@@ -40,6 +40,7 @@ import wave
 import zipfile
 import zlib
 from collections.abc import Callable, Iterator
+from typing import IO
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -487,43 +488,62 @@ def check_fs(fs: str, dev: str) -> None:
         run("e2fsck", "-fn", dev)
 
 
+def start_fuse(cmd: list[str], mnt: Path, log_file: IO[bytes]) -> subprocess.Popen[bytes]:
+    """Run a FUSE driver in the foreground and wait until its mount appears.
+
+    Foreground, so we can wait for it to finish writing after unmount (umount
+    returns before a FUSE driver exits). Its output goes to a file, because an
+    unread pipe could fill up and stall the driver.
+    """
+    process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+    deadline = time.monotonic() + 30
+    while not os.path.ismount(mnt):
+        if process.poll() is not None or time.monotonic() > deadline:
+            if process.poll() is None:
+                process.kill()
+            log_file.seek(0)
+            output = log_file.read().decode(errors="replace")[-4000:]
+            raise RuntimeError(f"{cmd[0]} failed to mount on {mnt}:\n{output}")
+        time.sleep(0.1)
+    return process
+
+
 @contextmanager
 def mounted(fs: str, dev: str) -> Iterator[Path]:
     mnt = Path(tempfile.mkdtemp(prefix="datareco-mnt-"))
-    ntfs_process: subprocess.Popen[bytes] | None = None
-    ntfs_log = tempfile.TemporaryFile()
+    fuse_process: subprocess.Popen[bytes] | None = None
+    fuse_log = tempfile.TemporaryFile()
     try:
         if fs.startswith("fat"):
             run("mount", "-t", "vfat", "-o", "utf8,shortname=mixed", dev, mnt)
         elif fs == "exfat":
-            run("mount", "-t", "exfat", "-o", "iocharset=utf8", dev, mnt)
+            try:
+                # -i: use the kernel driver itself, never a mount.exfat helper.
+                run("mount", "-i", "-t", "exfat", "-o", "iocharset=utf8", dev, mnt)
+            except RuntimeError as error:
+                # Some kernels (e.g. GitHub's Linux runners) ship without exFAT.
+                if "unknown filesystem type" not in str(error) or not shutil.which("mount.exfat-fuse"):
+                    raise
+                log("    no exFAT in this kernel, using exfat-fuse")
+                # -d keeps the driver in the foreground (and logs to fuse_log).
+                fuse_process = start_fuse(["mount.exfat-fuse", "-d", dev, str(mnt)], mnt, fuse_log)
         elif fs == "ext4":
             run("mount", "-t", "ext4", dev, mnt)
         elif fs == "ntfs":
-            # Keep ntfs-3g in the foreground so we can wait for it to finish
-            # writing after unmount (umount returns before a FUSE driver exits).
-            # Its output goes to a file: an unread pipe could fill up and stall it.
-            ntfs_process = subprocess.Popen(
-                ["ntfs-3g", "-o", "streams_interface=windows,no_detach", dev, str(mnt)],
-                stdout=ntfs_log, stderr=subprocess.STDOUT,
+            fuse_process = start_fuse(
+                ["ntfs-3g", "-o", "streams_interface=windows,no_detach", dev, str(mnt)], mnt, fuse_log
             )
-            deadline = time.monotonic() + 30
-            while not os.path.ismount(mnt):
-                if ntfs_process.poll() is not None or time.monotonic() > deadline:
-                    ntfs_log.seek(0)
-                    output = ntfs_log.read().decode(errors="replace")
-                    raise RuntimeError(f"ntfs-3g failed to mount {dev}:\n{output}")
-                time.sleep(0.1)
         yield mnt
     finally:
         if os.path.ismount(mnt):
             run("umount", mnt)
-        if ntfs_process is not None:
-            if ntfs_process.poll() is None and not os.path.ismount(mnt):
-                ntfs_process.wait(timeout=120)
-            if ntfs_process.poll() is None:
-                ntfs_process.kill()
-        ntfs_log.close()
+        if fuse_process is not None:
+            try:
+                fuse_process.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                fuse_process.kill()
+                raise
+        fuse_log.close()
         mnt.rmdir()
 
 
@@ -803,7 +823,7 @@ def main() -> None:
     missing = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
     if missing:
         sys.exit(f"missing tools: {', '.join(missing)}. On Debian/Ubuntu: "
-                 "apt install dosfstools exfatprogs ntfs-3g e2fsprogs fdisk")
+                 "apt install dosfstools exfatprogs exfat-fuse ntfs-3g e2fsprogs fdisk")
     ensure_loop_nodes()
     build_all(args.out.resolve(), selected_names(args.only))
 

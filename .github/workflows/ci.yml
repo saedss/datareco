@@ -68,7 +68,7 @@ jobs:
       - name: Install file-system tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y dosfstools exfatprogs ntfs-3g e2fsprogs fdisk
+          sudo apt-get install -y dosfstools exfatprogs exfat-fuse ntfs-3g e2fsprogs fdisk
       - name: Build images
         # GITHUB_ACTIONS tells the generator to report failures as annotations.
         run: sudo --preserve-env=GITHUB_ACTIONS python3 testdata/make_images.py --out testdata/out
