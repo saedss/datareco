@@ -15,13 +15,14 @@ partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
 ## Building
 
+DataReco targets Windows for now; Linux and macOS support comes in Phase 10.
+
 Prerequisites:
 
 - [Rust](https://rustup.rs) (stable)
 - [Node.js](https://nodejs.org) 22 or newer
-- **Windows:** Visual Studio Build Tools with the "Desktop development with C++"
-  workload, and the WebView2 runtime (built into Windows 10 and 11)
-- **Linux:** the [Tauri system libraries](https://tauri.app/start/prerequisites/#linux)
+- Visual Studio Build Tools with the "Desktop development with C++" workload
+- The WebView2 runtime (built into Windows 10 and 11)
 
 Engine and command-line tool:
 
