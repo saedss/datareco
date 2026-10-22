@@ -1,0 +1,11 @@
+* text=auto
+
+# Scripts that run inside Linux (CI, Docker) must keep LF line endings.
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.img binary

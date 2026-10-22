@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/cli", "apps/gui/src-tauri"]
+# Plain `cargo build` / `cargo test` skip the desktop app, because it needs the
+# frontend built first (`npm run build` in apps/gui). Build it with `-p datareco-gui`.
+default-members = [
+    "crates/fs",
+    "crates/imaging",
+    "crates/io",
+    "crates/partitions",
+    "crates/raid",
+    "crates/scan",
+    "crates/templates",
+    "apps/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+repository = "https://github.com/saedss/datareco"
+publish = false
+
+[workspace.dependencies]
+clap = { version = "4.6", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+
+[workspace.lints.rust]
+# Raw disk access needs a little `unsafe` for OS calls (crates/io only).
+# Everywhere else it stays off.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# Disk offsets are u64; silently truncating one to u32/usize reads the wrong sector.
+cast_possible_truncation = "warn"
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+# Corrupted disks produce absurd numbers. Overflow must fail loudly, never wrap
+# around and point at the wrong place on the disk.
+overflow-checks = true
+lto = "thin"
+codegen-units = 1

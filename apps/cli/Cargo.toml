@@ -1,0 +1,18 @@
+[package]
+name = "datareco-cli"
+description = "Command-line tool for DataReco"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "datareco"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+
+[lints]
+workspace = true

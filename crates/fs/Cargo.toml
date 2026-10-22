@@ -1,0 +1,13 @@
+[package]
+name = "datareco-fs"
+description = "File-system readers for DataReco (NTFS, FAT, exFAT, ext, HFS+, APFS, ReFS, btrfs)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

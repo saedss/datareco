@@ -1,0 +1,13 @@
+[package]
+name = "datareco-imaging"
+description = "Disk imaging and cloning with failing-drive handling for DataReco"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
