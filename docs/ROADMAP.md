@@ -23,7 +23,8 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 
 - Rust engine (`crates/`), shared by the command-line tool (`apps/cli`) and the desktop app.
 - Desktop app: Tauri 2 + React + TypeScript (`apps/gui`).
-- CI on Windows, Linux and macOS (GitHub Actions).
+- CI on Windows (GitHub Actions). One Linux job builds the test disk images;
+  Linux and macOS app builds start in Phase 10.
 
 ## Phases
 

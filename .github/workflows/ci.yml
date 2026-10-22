@@ -16,14 +16,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# DataReco targets Windows for now; Linux and macOS builds come in Phase 10
+# (docs/ROADMAP.md).
 jobs:
   engine:
-    name: Engine and CLI (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: Engine and CLI
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -38,20 +36,10 @@ jobs:
         run: cargo test
 
   desktop:
-    name: Desktop app (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: Desktop app
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install Linux system libraries for Tauri
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
@@ -71,7 +59,10 @@ jobs:
 
   test-images:
     name: Test disk images
-    runs-on: ubuntu-latest
+    # Formatting and mounting FAT/exFAT/NTFS/ext4 images needs Linux tools, so
+    # this job runs on Linux. It only produces test data; it builds no app.
+    # Same Ubuntu release as testdata/docker/Dockerfile.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Install file-system tools
@@ -79,7 +70,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dosfstools exfatprogs ntfs-3g e2fsprogs fdisk
       - name: Build images
-        run: sudo python3 testdata/make_images.py --out testdata/out
+        # GITHUB_ACTIONS tells the generator to report failures as annotations.
+        run: sudo --preserve-env=GITHUB_ACTIONS python3 testdata/make_images.py --out testdata/out
       - uses: actions/upload-artifact@v7
         with:
           name: test-images

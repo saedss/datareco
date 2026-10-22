@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import wave
 import zipfile
 import zlib
@@ -807,5 +808,23 @@ def main() -> None:
     build_all(args.out.resolve(), selected_names(args.only))
 
 
+def report_ci_error(message: str) -> None:
+    """In GitHub Actions, also post the error as an annotation. Annotations show
+    on the run's summary page to anyone, while job logs need a signed-in account."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    message = message[-4000:]  # annotations are size-limited; the end matters most
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::error title=make_images.py failed::{escaped}", flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as stop:
+        if isinstance(stop.code, str):
+            report_ci_error(stop.code)
+        raise
+    except Exception:
+        report_ci_error(traceback.format_exc())
+        raise
