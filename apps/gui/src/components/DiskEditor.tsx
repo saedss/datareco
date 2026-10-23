@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ByteData, CommandError, RawStatus, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
+import { CopyView } from "./CopyView";
 import { FileBrowser } from "./FileBrowser";
 import { BYTES_PER_ROW, HexGrid, Range } from "./HexGrid";
 import { PartitionsPanel } from "./PartitionsPanel";
@@ -15,13 +16,24 @@ type Props = {
   templates: TemplateList | null;
   onReloadTemplates: () => void;
   onRestartAsAdmin: () => void;
+  /** Opens an image file (a finished copy) in the editor. */
+  onOpenImage: (path: string) => void;
 };
 
-type View = "sectors" | "files" | "scan";
+type View = "sectors" | "files" | "scan" | "copy";
 
 /** The disk editor (view only): sectors as hex with navigation, search and
- *  structures; the files on its volumes; or a scan for lost volumes. */
-export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTemplates, onRestartAsAdmin }: Props) {
+ *  structures; the files on its volumes; a scan for lost volumes; or copying
+ *  it into an image file or onto another disk. */
+export function DiskEditor({
+  sourceId,
+  title,
+  subtitle,
+  templates,
+  onReloadTemplates,
+  onRestartAsAdmin,
+  onOpenImage,
+}: Props) {
   const [info, setInfo] = useState<SourceInfo | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const [topRow, setTopRow] = useState(0);
@@ -36,6 +48,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
   // its whole MFT), then stay, so what they show survives switching views.
   const [filesOpened, setFilesOpened] = useState(false);
   const [scanOpened, setScanOpened] = useState(false);
+  const [copyOpened, setCopyOpened] = useState(false);
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [raw, setRaw] = useState<RawStatus | null>(null);
   const [browse, setBrowse] = useState<{ key: string; nonce: number } | null>(null);
@@ -45,6 +58,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
     setView(next);
     if (next === "files") setFilesOpened(true);
     if (next === "scan") setScanOpened(true);
+    if (next === "copy") setCopyOpened(true);
   }, []);
 
   useEffect(() => {
@@ -219,6 +233,17 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
               />
             </div>
           )}
+          {copyOpened && (
+            <div className="view-pane" hidden={view !== "copy"}>
+              <CopyView
+                sourceId={info.id}
+                sourceName={info.name}
+                size={info.size}
+                onOpenImage={onOpenImage}
+                onRestartAsAdmin={onRestartAsAdmin}
+              />
+            </div>
+          )}
         </>
       )}
     </section>
@@ -257,6 +282,9 @@ function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
             <button role="tab" aria-selected={view === "scan"} onClick={() => onView("scan")}>
               Scan
             </button>
+            <button role="tab" aria-selected={view === "copy"} onClick={() => onView("copy")}>
+              Copy
+            </button>
 
           </div>
         )}
@@ -265,7 +293,10 @@ function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
             {formatSize(info.size)} · {formatNumber(info.sectorCount)} sectors of {info.sectorSize} bytes
           </p>
         )}
-        <span className="badge" title="Nothing is ever written to your disks in this mode">
+        <span
+          className="badge"
+          title="DataReco never writes to the disk you're looking at. Copying onto another disk asks you to type its name first."
+        >
           Read-only
         </span>
       </div>

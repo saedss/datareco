@@ -2,6 +2,7 @@
 
 mod files;
 mod format;
+mod imaging;
 mod partitions;
 mod raw;
 mod scan;
@@ -82,6 +83,33 @@ impl VolumeArgs {
 }
 
 /// DataReco: disk editor and data recovery tool. Never writes to disks.
+/// How `image` and `clone` copy.
+#[derive(Args)]
+struct CopyArgs {
+    /// The map file recording what was copied (default: next to the image,
+    /// or disk1-to-disk2.map in this folder). If it exists, the copy carries on.
+    #[arg(long)]
+    map: Option<PathBuf>,
+    /// Passes over the sectors that couldn't be read, at the end.
+    #[arg(long, default_value_t = 1)]
+    retries: u32,
+    /// Don't skip ahead after read errors: read everything in order. Skipping
+    /// gets the most off a failing drive first.
+    #[arg(long)]
+    no_skip: bool,
+}
+
+impl CopyArgs {
+    fn request<'a>(&'a self, source: &'a str) -> imaging::CopyRequest<'a> {
+        imaging::CopyRequest {
+            source,
+            map: self.map.as_deref(),
+            retries: self.retries,
+            skip: !self.no_skip,
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "datareco", version, about, arg_required_else_help = true)]
 struct Cli {
@@ -253,6 +281,32 @@ enum Command {
         #[arg(long)]
         deleted: bool,
     },
+    /// Copy a disk, volume or image file into a new image file, in passes
+    /// made for failing drives. A map file records what was copied, so the
+    /// copy can stop and carry on: run the same command again.
+    Image {
+        /// What to copy: a disk (disk1), a volume (E:) or an image file path.
+        source: String,
+        /// The image file to write (on another disk).
+        #[arg(long, short = 't')]
+        to: PathBuf,
+        #[command(flatten)]
+        copy: CopyArgs,
+    },
+    /// Copy a disk, volume or image file onto another disk, erasing it. A map
+    /// file records what was copied, so the copy can stop and carry on.
+    Clone {
+        /// What to copy: a disk (disk1), a volume (E:) or an image file path.
+        source: String,
+        /// The disk to copy onto, e.g. disk2. Everything on it is erased.
+        #[arg(long, short = 't')]
+        to: String,
+        /// The disk being erased again, to confirm (e.g. --erase disk2).
+        #[arg(long)]
+        erase: Option<String>,
+        #[command(flatten)]
+        copy: CopyArgs,
+    },
     /// Search a disk, volume or image file for text or bytes.
     Find {
         /// What to search: a disk (disk0), a volume (C:) or an image file path.
@@ -350,7 +404,13 @@ fn main() -> ExitCode {
             },
             prefer_deleted: deleted,
         }),
-
+        Command::Image { source, to, copy } => imaging::image(&copy.request(&source), &to),
+        Command::Clone {
+            source,
+            to,
+            erase,
+            copy,
+        } => imaging::clone(&copy.request(&source), &to, erase.as_deref()),
         Command::Find {
             source,
             text,

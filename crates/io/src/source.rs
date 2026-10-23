@@ -7,6 +7,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::error::{Error, Result};
+use crate::spec::SourceSpec;
+
 /// Raw access to whole sectors of a disk, volume or image file.
 ///
 /// Implementations only read. [`crate::Disk`] adds caching and bad-sector
@@ -22,6 +25,13 @@ pub trait SectorSource: Send {
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> io::Result<()>;
 }
 
+/// Whether a read failed because the device is gone (unplugged), rather
+/// than because of the sectors read: copying should stop, not mark the rest
+/// of the disk bad.
+pub fn is_device_gone(error: &io::Error) -> bool {
+    crate::platform::is_device_gone(error)
+}
+
 /// A disk, volume or image file read through the OS file API.
 pub struct FileSource {
     file: File,
@@ -33,6 +43,18 @@ pub struct FileSource {
 }
 
 impl FileSource {
+    /// Opens a physical disk, volume or image file read-only, without the
+    /// cache and bad-sector handling [`crate::Disk`] adds: for copying.
+    pub fn open(spec: &SourceSpec) -> Result<FileSource> {
+        match spec {
+            SourceSpec::Image(path) => {
+                FileSource::open_image(path).map_err(|e| Error::from_io(&spec.display_name(), e))
+            }
+            SourceSpec::PhysicalDisk(number) => crate::platform::open_physical_disk(*number),
+            SourceSpec::Volume(path) => crate::platform::open_volume(path),
+        }
+    }
+
     /// Opens a disk image file read-only. Images use 512-byte sectors.
     pub fn open_image(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;

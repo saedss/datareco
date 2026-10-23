@@ -596,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "datareco-fs",
+ "datareco-imaging",
  "datareco-io",
  "datareco-partitions",
  "datareco-scan",
@@ -620,6 +621,7 @@ name = "datareco-gui"
 version = "0.1.0"
 dependencies = [
  "datareco-fs",
+ "datareco-imaging",
  "datareco-io",
  "datareco-partitions",
  "datareco-scan",
@@ -634,6 +636,11 @@ dependencies = [
 [[package]]
 name = "datareco-imaging"
 version = "0.1.0"
+dependencies = [
+ "datareco-io",
+ "serde",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "datareco-io"

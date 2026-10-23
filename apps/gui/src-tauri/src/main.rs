@@ -3,6 +3,7 @@
 // Release builds run without a console window on Windows. Do not remove.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod copies;
 mod files;
 mod partitions;
 mod raw;
@@ -206,6 +207,7 @@ fn main() {
         .manage(files::FileSystems::default())
         .manage(files::Recoveries::default())
         .manage(scans::Scans::default())
+        .manage(copies::Copies::default())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             app.manage(Templates::load(config.join("templates")));
@@ -248,6 +250,11 @@ fn main() {
             raw::open_saved_raw_scan,
             raw::signatures_info,
             raw::open_signatures,
+            copies::copy_disk_choices,
+            copies::read_copy_map,
+            copies::start_copy,
+            copies::continue_copy,
+            copies::stop_copy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

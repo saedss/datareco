@@ -1,6 +1,6 @@
 use std::io;
 
-/// Errors from opening or reading a disk, volume or image file.
+/// Errors from opening, reading or writing a disk, volume or image file.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The OS refused access. On Windows, reading disks and volumes needs
@@ -21,6 +21,11 @@ pub enum Error {
         size: u64,
     },
 
+    /// A copy or write that would be unsafe, such as writing over the disk
+    /// being copied from. The text says why, for people.
+    #[error("{reason}")]
+    Refused { reason: String },
+
     #[error("{what} is not supported on this platform yet")]
     Unsupported { what: String },
 
@@ -39,6 +44,7 @@ impl Error {
             Error::AccessDenied { .. } => "access_denied",
             Error::NotFound { .. } => "not_found",
             Error::OutOfRange { .. } => "out_of_range",
+            Error::Refused { .. } => "refused",
             Error::Unsupported { .. } => "unsupported",
             Error::Io { .. } => "io",
         }
@@ -52,6 +58,14 @@ impl Error {
             io::ErrorKind::PermissionDenied => Error::AccessDenied { name },
             io::ErrorKind::NotFound => Error::NotFound { name },
             _ => Error::Io { name, source },
+        }
+    }
+}
+
+impl Error {
+    pub(crate) fn refused(reason: impl Into<String>) -> Self {
+        Error::Refused {
+            reason: reason.into(),
         }
     }
 }

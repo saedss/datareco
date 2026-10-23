@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use datareco_fs::{Entry, EntryId, FileSystem};
-use datareco_io::{DeviceList, SourceSpec};
+use datareco_io::{SourceSpec, plain_path};
 use sha2::{Digest, Sha256};
 
 /// Bytes copied per read.
@@ -490,8 +490,8 @@ pub fn check_destination(source: &SourceSpec, destination: &Path) -> Result<(), 
     let Ok(devices) = datareco_io::list_devices() else {
         return Ok(());
     };
-    let source_disks = disks_of_source(source, &devices);
-    let destination_disks = disks_of_path(&full_path(destination), &devices);
+    let source_disks = devices.disks_of_source(source);
+    let destination_disks = devices.disks_of_path(destination);
     if source_disks.iter().any(|d| destination_disks.contains(d)) {
         return Err(RecoverError::Destination(format!(
             "{} is on the disk you're recovering from. Saving there could overwrite the files \
@@ -500,75 +500,4 @@ pub fn check_destination(source: &SourceSpec, destination: &Path) -> Result<(), 
         )));
     }
     Ok(())
-}
-
-/// A canonical Windows path without its `\\?\` prefix.
-fn plain_path(path: PathBuf) -> PathBuf {
-    let text = path.to_string_lossy();
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        return PathBuf::from(format!(r"\\{rest}"));
-    }
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) => PathBuf::from(rest),
-        None => path.clone(),
-    }
-}
-
-/// The destination as an absolute path, through its nearest existing folder.
-fn full_path(path: &Path) -> String {
-    let mut existing = path.to_path_buf();
-    let mut rest = Vec::new();
-    while !existing.exists() {
-        match (
-            existing.file_name().map(|n| n.to_owned()),
-            existing.parent(),
-        ) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                existing = parent.to_path_buf();
-            }
-            _ => break,
-        }
-    }
-    let mut full = fs::canonicalize(&existing).unwrap_or(existing);
-    for name in rest.into_iter().rev() {
-        full.push(name);
-    }
-    let text = full.to_string_lossy().into_owned();
-    text.strip_prefix(r"\\?\")
-        .map(str::to_owned)
-        .unwrap_or(text)
-}
-
-/// The physical disks a source lives on.
-pub(crate) fn disks_of_source(source: &SourceSpec, devices: &DeviceList) -> Vec<u32> {
-    match source {
-        SourceSpec::PhysicalDisk(n) => vec![*n],
-        SourceSpec::Volume(name) => devices
-            .volumes
-            .iter()
-            .filter(|v| {
-                v.path.eq_ignore_ascii_case(name)
-                    || v.mount_points
-                        .iter()
-                        .any(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(name))
-            })
-            .flat_map(|v| v.extents.iter().map(|e| e.disk))
-            .collect(),
-        SourceSpec::Image(_) => Vec::new(),
-    }
-}
-
-/// The physical disks the volume holding `path` lives on (the volume with
-/// the longest mount point the path starts with).
-pub(crate) fn disks_of_path(path: &str, devices: &DeviceList) -> Vec<u32> {
-    let lower = path.to_lowercase();
-    devices
-        .volumes
-        .iter()
-        .flat_map(|v| v.mount_points.iter().map(move |m| (m, v)))
-        .filter(|(m, _)| lower.starts_with(&m.to_lowercase()))
-        .max_by_key(|(m, _)| m.len())
-        .map(|(_, v)| v.extents.iter().map(|e| e.disk).collect())
-        .unwrap_or_default()
 }

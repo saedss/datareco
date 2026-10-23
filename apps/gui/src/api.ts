@@ -278,8 +278,82 @@ export type CommandError = {
     | "destination"
     | "stopped"
     | "saved_scan"
-    | "signatures";
+    | "signatures"
+    | "refused"
+    | "copy";
   message: string;
+};
+
+export type CopyPhase = "copying" | "trimming" | "scraping" | "retrying" | "filling" | "finished";
+
+/** Bytes of the source in each state. */
+export type CopyTotals = {
+  copied: number;
+  untried: number;
+  untrimmed: number;
+  unscraped: number;
+  bad: number;
+  /** Separate stretches of unreadable sectors. */
+  badAreas: number;
+};
+
+export type CopyProgress = {
+  phase: CopyPhase;
+  pass: number;
+  /** What the copy is doing, in words. */
+  description: string;
+  position: number;
+  size: number;
+  totals: CopyTotals;
+  readErrors: number;
+  finished: boolean;
+};
+
+export type CopyStatus = {
+  progress: CopyProgress;
+  /** The map in squares: "+" copied, "?" not tried, "*" and "/" failed and being worked on, "-" unreadable. */
+  picture: string;
+  mapPath: string;
+  /** Bytes per second since the copy was started or carried on. */
+  rate: number | null;
+  /** False once the copy has finished or stopped (its target is closed). */
+  running: boolean;
+};
+
+export type CopyTarget = { kind: "image"; path: string } | { kind: "disk"; number: number };
+
+/** What copying onto a disk will do; show it before asking to confirm. */
+export type DiskTargetCheck = {
+  number: number;
+  name: string;
+  model: string;
+  size: number;
+  sectorSize: number;
+  /** Its volumes, which will be closed and overwritten. */
+  volumes: string[];
+  warnings: string[];
+  /** What to type to confirm: "disk2". */
+  confirmation: string;
+};
+
+export type DiskChoice = {
+  number: number;
+  name: string;
+  model: string;
+  size: number;
+  check: DiskTargetCheck | null;
+  /** Why the copy can't go onto it. */
+  problem: string | null;
+};
+
+/** What a map file says about a copy. */
+export type MapInfo = {
+  source: string | null;
+  target: string | null;
+  size: number;
+  totals: CopyTotals;
+  finished: boolean;
+  picture: string;
 };
 
 export const api = {
@@ -347,6 +421,22 @@ export const api = {
   /** Shows the user's signature list, creating it from the built-in one. */
   openSignatures: () => invoke<void>("open_signatures"),
 
+
+  /** The disks this source could be copied onto, and why the others can't. */
+  copyDiskChoices: (id: string) => invoke<DiskChoice[]>("copy_disk_choices", { id }),
+  readCopyMap: (path: string) => invoke<MapInfo>("read_copy_map", { path }),
+  /** Starts a copy, or carries one on if `mapPath` exists; then call continueCopy. */
+  startCopy: (
+    id: string,
+    target: CopyTarget,
+    mapPath: string,
+    retries: number,
+    skip: boolean,
+    confirmation: string | null,
+  ) => invoke<CopyStatus>("start_copy", { id, target, mapPath, retries, skip, confirmation }),
+  continueCopy: (id: string) => invoke<CopyStatus>("continue_copy", { id }),
+  /** Saves the map and closes the target; null if no copy was running. */
+  stopCopy: (id: string) => invoke<CopyStatus | null>("stop_copy", { id }),
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

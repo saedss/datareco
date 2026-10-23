@@ -2,15 +2,34 @@
 //! Image files still work everywhere.
 
 use crate::devices::DeviceList;
-use crate::disk::Disk;
-use crate::error::{Error, Result};
+use std::fs::File;
+use std::io;
 
-pub(crate) fn open_physical_disk(_number: u32) -> Result<Disk> {
+use crate::error::{Error, Result};
+use crate::source::FileSource;
+use crate::target::OpenedDisk;
+
+pub(crate) fn open_physical_disk(_number: u32) -> Result<FileSource> {
     Err(unsupported("Opening physical disks"))
 }
 
-pub(crate) fn open_volume(_path: &str) -> Result<Disk> {
+pub(crate) fn open_volume(_path: &str) -> Result<FileSource> {
     Err(unsupported("Opening volumes"))
+}
+
+pub(crate) fn open_disk_for_writing(_number: u32, _volumes: &[String]) -> Result<OpenedDisk> {
+    Err(unsupported("Writing to disks"))
+}
+
+pub(crate) fn update_disk_properties(_file: &File) {}
+
+/// Files on Linux and macOS are sparse without asking.
+pub(crate) fn make_sparse(_file: &File) -> io::Result<()> {
+    Ok(())
+}
+
+pub(crate) fn is_device_gone(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
 }
 
 pub(crate) fn list_devices() -> Result<DeviceList> {

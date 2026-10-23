@@ -3,19 +3,21 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 6).** DataReco lists your disks and volumes,
+> **Status: early development (Phase 7).** DataReco lists your disks and volumes,
 > has a read-only disk editor (hex view, search, bookmarks, structure templates),
 > reads and checks MBR and GPT partition tables, finds lost partitions, browses
 > NTFS, FAT and exFAT volumes (deleted files included), scans disks for lost and
-> damaged volumes, recovers files to another disk, and finds files by their
-> contents when no file system is left. Disk imaging comes next; see the
-> [roadmap](docs/ROADMAP.md).
+> damaged volumes, recovers files to another disk, finds files by their contents
+> when no file system is left, and copies failing disks into image files or onto
+> other disks. More file systems come next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
-DataReco only reads. Windows lets programs read disks and volumes directly only
-when they run as administrator; image files work without. The desktop app offers
-**Restart as administrator** when it needs to.
+DataReco only reads the disks you look at. The one thing that writes is copying:
+into a new image file, or onto another disk once you type that disk's name.
+Windows lets programs read disks and volumes directly only when they run as
+administrator; image files work without. The desktop app offers **Restart as
+administrator** when it needs to.
 
 **Desktop app:** pick a disk, volume or image file on the left.
 
@@ -48,6 +50,14 @@ when they run as administrator; image files work without. The desktop app offers
   after a format. What it finds opens in the Files view in a folder per kind,
   ready to preview and recover. **Edit signatures…** opens the list of what it
   looks for, to change it or add your own.
+- **Copy** (top right) copies the whole disk into an image file or onto another
+  disk, in passes made for failing drives: a fast first pass that skips past read
+  errors, then backwards, then the edges and insides of what failed, then retries.
+  A map file records what was copied (shown as a picture), so a copy can be paused
+  and carried on, even after closing DataReco. Then recover from the copy instead of
+  the failing drive. Copying onto a disk shows what will be erased and asks you to
+  type its name; DataReco refuses the disk being copied, the disk Windows runs
+  from, and disks holding the image or map file.
 
 `datareco-gui --open disk0` starts on a given source.
 
@@ -79,11 +89,19 @@ datareco raw disk1 -p 2 --save disk1.drraw             # only partition 2; keep 
 datareco ls disk1 --raw disk1.drraw -r                 # what that raw scan found
 datareco signatures                                    # what raw scans look for
 datareco signatures --write my-signatures.toml         # a copy to edit; use with --signatures
+datareco image disk1 --to D:\disk1.img                 # copy into an image; run again to carry on
+datareco image disk1 --to D:\disk1.img --retries 3     # once done: try unreadable sectors again
+datareco clone disk1 --to disk2 --map D:\c.map         # shows what would be erased on disk2
+datareco clone disk1 --to disk2 --map D:\c.map --erase disk2   # copies disk1 onto disk2
 
 ```
 
 Recovering saves each file with its times, and writes a log (what was saved, what
 couldn't be and why) and a SHA-256 checksum list next to the files.
+
+Copies keep their map in GNU ddrescue's mapfile format, so ddrescue can carry on a
+copy DataReco started, and the other way round. Sectors that couldn't be read
+are zeros in an image; on a disk they are filled with zeros at the end.
 
 
 A source is `diskN`, a drive letter like `C:`, a volume path (`\\?\Volume{…}`),
@@ -94,7 +112,13 @@ or an image file path.
 - **Read-only by default.** DataReco never writes to the disk you are recovering from
   unless you turn on write mode and confirm.
 - **Recover to a different disk.** Saving recovered files to the source disk can
-  overwrite the very data you are trying to get back, so DataReco blocks it.
+  overwrite the very data you are trying to get back, so DataReco blocks it. The
+  same goes for image and map files when copying.
+- **Copying onto a disk erases it**, so DataReco shows what's on it and asks you to
+  type its name first. It never writes onto the disk being copied or the disk
+  Windows runs from, and it closes the target's volumes before writing.
+- **Copy a failing drive first.** Every read can be its last: copy it once, then
+  scan and recover from the copy.
 
 ## Building
 

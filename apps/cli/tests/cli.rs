@@ -655,3 +655,121 @@ fn signatures_can_be_listed_written_and_used() {
     std::fs::remove_file(list).unwrap();
     std::fs::remove_file(image).unwrap();
 }
+
+/// Bytes that differ from sector to sector, ending partway through a sector.
+fn copy_source(name: &str) -> (PathBuf, Vec<u8>) {
+    let bytes: Vec<u8> = (0..300_100u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect();
+    (temp_image(name, &bytes), bytes)
+}
+
+fn removed(path: PathBuf) -> PathBuf {
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+#[test]
+fn image_copies_a_source_and_maps_it() {
+    let (source, bytes) = copy_source("image-src.img");
+    let image =
+        removed(std::env::temp_dir().join(format!("datareco-cli-{}-copy.img", std::process::id())));
+    let map = image.with_extension("map");
+    let _ = std::fs::remove_file(&map);
+    let out = datareco(&[
+        "image",
+        source.to_str().unwrap(),
+        "--to",
+        image.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Copied all"), "{}", stdout(&out));
+    assert_eq!(std::fs::read(&image).unwrap(), bytes);
+    let text = std::fs::read_to_string(&map).unwrap();
+    assert!(text.contains("0x00000000  0x00049444  +"), "{text}");
+
+    // Running it again finds the copy finished.
+    let out = datareco(&[
+        "image",
+        source.to_str().unwrap(),
+        "--to",
+        image.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("already finished"),
+        "{}",
+        stdout(&out)
+    );
+
+    // A file that is there already isn't replaced without its map.
+    std::fs::remove_file(&map).unwrap();
+    let out = datareco(&[
+        "image",
+        source.to_str().unwrap(),
+        "--to",
+        image.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("already exists"), "{}", stderr(&out));
+    for path in [source, image] {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn image_carries_on_a_stopped_copy_from_its_map() {
+    let (source, bytes) = copy_source("resume-src.img");
+    // A copy stopped after 0x10000 bytes, with a stretch that failed to read.
+    let mut partial = bytes.clone();
+    partial[0x10000..].fill(0);
+    let image = temp_image("resume-copy.img", &partial);
+    let map = temp_image(
+        "resume-copy.map",
+        b"# current_pos  current_status  current_pass\n\
+          0x00010000     ?               1\n\
+          0x00000000  0x00008000  +\n\
+          0x00008000  0x00001000  *\n\
+          0x00009000  0x00007000  +\n\
+          0x00010000  0x00039444  ?\n",
+    );
+    let out = datareco(&[
+        "image",
+        source.to_str().unwrap(),
+        "--to",
+        image.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Carrying on"), "{}", stdout(&out));
+    assert_eq!(std::fs::read(&image).unwrap(), bytes);
+    let text = std::fs::read_to_string(&map).unwrap();
+    assert!(text.contains("0x00000000  0x00049444  +"), "{text}");
+    for path in [source, image, map] {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn clone_only_writes_to_disks_it_can_check() {
+    let (source, _) = copy_source("clone-src.img");
+    let out = datareco(&["clone", source.to_str().unwrap(), "--to", "copy.img"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("must be a disk"), "{}", stderr(&out));
+    let out = datareco(&[
+        "clone",
+        source.to_str().unwrap(),
+        "--to",
+        "disk99",
+        "--erase",
+        "disk99",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("Disk 99 was not found"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_file(source).unwrap();
+}

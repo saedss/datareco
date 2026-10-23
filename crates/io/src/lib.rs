@@ -1,8 +1,10 @@
 //! Disk and image-file access: listing disks, reading sectors, caching, and
 //! handling bad sectors (retry, skip, log).
 //!
-//! Everything here is read-only: no function in this crate asks the OS for
-//! write access to a disk, volume or image.
+//! Reading never writes: opening a disk, volume or image to read it never
+//! asks the OS for write access. Writing happens only through [`target`]:
+//! new image files, image files a copy carries on into, and whole disks that
+//! passed [`check_disk_target`] and were confirmed by typing their name.
 //!
 //! Start with [`SourceSpec`] to say what to open and [`Disk::open`] to open it.
 //! [`Disk`] serves reads at any byte offset from a block cache, and records
@@ -19,6 +21,7 @@ mod error;
 mod search;
 mod source;
 mod spec;
+pub mod target;
 
 #[cfg(not(windows))]
 mod unsupported;
@@ -32,11 +35,15 @@ use unsupported as platform;
 use windows as platform;
 
 pub use devices::{
-    DeviceList, DiskExtent, PhysicalDiskInfo, VolumeInfo, is_elevated, list_devices,
-    relaunch_elevated,
+    DeviceList, DiskExtent, PhysicalDiskInfo, VolumeInfo, full_path, is_elevated, list_devices,
+    plain_path, relaunch_elevated, same_path,
 };
 pub use disk::{BLOCK_SIZE, Disk, ReadOutcome, ReadPolicy};
 pub use error::{Error, Result};
 pub use search::SearchProgress;
-pub use source::{FileSource, MemorySource, SectorSource};
+pub use source::{FileSource, MemorySource, SectorSource, is_device_gone};
 pub use spec::SourceSpec;
+pub use target::{
+    CopySource, DiskTarget, DiskTargetCheck, ImageTarget, MemoryTarget, SectorTarget,
+    check_disk_target, check_outside_source,
+};
