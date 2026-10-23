@@ -3,6 +3,7 @@
 mod files;
 mod format;
 mod partitions;
+mod raw;
 mod scan;
 mod structures;
 
@@ -52,17 +53,21 @@ fn parse_offset(text: &str) -> Result<u64, String> {
 #[derive(Args)]
 struct VolumeArgs {
     /// Which partition, by its number in `datareco partitions`.
-    #[arg(long, short, conflicts_with_all = ["offset", "scan"])]
+    #[arg(long, short, conflicts_with_all = ["offset", "scan", "raw"])]
     partition: Option<u32>,
     /// Where the volume starts, as a byte offset (decimal or 0x hex).
-    #[arg(long, value_parser = parse_offset, conflicts_with = "scan")]
+    #[arg(long, value_parser = parse_offset, conflicts_with_all = ["scan", "raw"])]
     offset: Option<u64>,
     /// A scan saved with `datareco scan --save`, to use a volume it found.
-    #[arg(long, requires = "volume")]
+    #[arg(long, requires = "volume", conflicts_with = "raw")]
     scan: Option<PathBuf>,
     /// That volume's number in the scan's list.
     #[arg(long, requires = "scan")]
     volume: Option<usize>,
+    /// A raw scan saved with `datareco raw --save`: the files it found by
+    /// their contents, in a folder per kind (JPG, PDF, …).
+    #[arg(long)]
+    raw: Option<PathBuf>,
 }
 
 impl VolumeArgs {
@@ -71,6 +76,7 @@ impl VolumeArgs {
             partition: self.partition,
             offset: self.offset,
             scan: self.scan.zip(self.volume),
+            raw: self.raw,
         }
     }
 }
@@ -188,6 +194,42 @@ enum Command {
         #[arg(long, conflicts_with = "full")]
         resume: Option<PathBuf>,
     },
+    /// Find files by their contents (JPEG, PDF, ZIP, MP4, …) when no file
+    /// system says where they are, for example after a format.
+    Raw {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+        /// Only look inside this partition, by its number in `datareco partitions`.
+        #[arg(long, short, conflicts_with = "offset")]
+        partition: Option<u32>,
+        /// Only look from this byte offset on (decimal or 0x hex).
+        #[arg(long, value_parser = parse_offset)]
+        offset: Option<u64>,
+        /// Use this signature list instead of the built-in one
+        /// (`datareco signatures --write FILE` starts one).
+        #[arg(long)]
+        signatures: Option<PathBuf>,
+        /// Save the scan to this file as it goes; `ls`, `cat` and `recover`
+        /// take `--raw FILE` to use what it found.
+        #[arg(long)]
+        save: Option<PathBuf>,
+        /// Carry on with a raw scan saved with --save.
+        #[arg(long, conflicts_with_all = ["partition", "offset"])]
+        resume: Option<PathBuf>,
+        /// Save every file found into this folder (on another disk).
+        #[arg(long, short = 't')]
+        to: Option<PathBuf>,
+    },
+    /// List the file signatures raw recovery looks for, or write them to a
+    /// file to change them.
+    Signatures {
+        /// Show this signature list instead of the built-in one.
+        #[arg(long, conflicts_with = "write")]
+        file: Option<PathBuf>,
+        /// Write the built-in list to this new file, to edit.
+        #[arg(long)]
+        write: Option<PathBuf>,
+    },
     /// Save files and folders from a volume to a folder on another disk,
     /// with their times, a log and SHA-256 checksums.
     Recover {
@@ -271,6 +313,24 @@ fn main() -> ExitCode {
             save,
             resume,
         } => scan::scan(&source, full, save.as_deref(), resume.as_deref()),
+        Command::Raw {
+            source,
+            partition,
+            offset,
+            signatures,
+            save,
+            resume,
+            to,
+        } => raw::raw(&raw::RawRequest {
+            source: &source,
+            partition,
+            offset,
+            signatures: signatures.as_deref(),
+            save: save.as_deref(),
+            resume: resume.as_deref(),
+            to: to.as_deref(),
+        }),
+        Command::Signatures { file, write } => raw::signatures(file.as_deref(), write.as_deref()),
         Command::Recover {
             source,
             paths,

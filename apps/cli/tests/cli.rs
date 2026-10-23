@@ -526,3 +526,132 @@ fn recover_saves_the_paths_asked_for() {
     std::fs::remove_dir_all(destination).unwrap();
     std::fs::remove_file(image).unwrap();
 }
+
+/// A disk with no file system: a PNG and a BMP, each at a sector's start,
+/// with noise around them.
+fn files_without_a_file_system(name: &str) -> (PathBuf, Vec<u8>, Vec<u8>) {
+    use datareco_fs::testutil::noise;
+    let chunk = |kind: &[u8], data: &[u8]| {
+        let len = u32::try_from(data.len()).unwrap().to_be_bytes();
+        [&len[..], kind, data, &[0, 0, 0, 0]].concat()
+    };
+    let png = [
+        &b"\x89PNG\r\n\x1a\n"[..],
+        &chunk(b"IHDR", &[0, 0, 0, 8, 0, 0, 0, 8, 8, 2, 0, 0, 0]),
+        &chunk(b"IDAT", &noise(1, 2000)),
+        &chunk(b"IEND", &[]),
+    ]
+    .concat();
+    let mut bmp = vec![0u8; 54];
+    bmp[..2].copy_from_slice(b"BM");
+    bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+    bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+    bmp.extend(noise(2, 3000));
+    let size = u32::try_from(bmp.len()).unwrap();
+    bmp[2..6].copy_from_slice(&size.to_le_bytes());
+
+    let mut image = noise(3, 1024);
+    for file in [&png, &bmp] {
+        image.extend(file);
+        image.resize(image.len().next_multiple_of(512), 0);
+        image.extend(noise(4, 1024));
+    }
+    (temp_image(name, &image), png, bmp)
+}
+
+#[test]
+fn raw_finds_files_by_their_contents_and_saves_them() {
+    let (image, png, bmp) = files_without_a_file_system("raw.img");
+    let image_path = image.to_str().unwrap();
+    let saved = temp_folder("raw-scan.json");
+    let destination = temp_folder("raw-saved");
+    let out = datareco(&[
+        "raw",
+        image_path,
+        "--save",
+        saved.to_str().unwrap(),
+        "--to",
+        destination.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("Found 2 files by their contents"), "{text}");
+    assert!(text.contains("Saved 2 files and 2 folders"), "{text}");
+    let only = |folder: &str| {
+        let entries: Vec<_> = std::fs::read_dir(destination.join(folder))
+            .unwrap()
+            .collect();
+        assert_eq!(entries.len(), 1, "{folder}");
+        std::fs::read(entries[0].as_ref().unwrap().path()).unwrap()
+    };
+    assert_eq!(only("PNG"), png);
+    assert_eq!(only("BMP"), bmp);
+
+    // What the saved scan found can be listed like a volume.
+    let out = datareco(&["ls", image_path, "--raw", saved.to_str().unwrap(), "-r"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("PNG/f0000000002.png"), "{text}");
+    assert!(text.contains("BMP/"), "{text}");
+    std::fs::remove_dir_all(destination).unwrap();
+    std::fs::remove_file(saved).unwrap();
+    std::fs::remove_file(image).unwrap();
+}
+
+#[test]
+fn signatures_can_be_listed_written_and_used() {
+    let out = datareco(&["signatures"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("JPEG image"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("FF D8 FF"), "{}", stdout(&out));
+
+    let list = temp_folder("signatures.toml");
+    let out = datareco(&["signatures", "--write", list.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let again = datareco(&["signatures", "--write", list.to_str().unwrap()]);
+    assert!(
+        stderr(&again).contains("already exists"),
+        "{}",
+        stderr(&again)
+    );
+
+    // Only BMPs now: the PNG isn't looked for.
+    std::fs::write(
+        &list,
+        "[[signature]]\nname = \"BMP\"\nextension = \"bmp\"\nheader = \"42 4D\"\nsize = \"bmp\"\n",
+    )
+    .unwrap();
+    let (image, _, _) = files_without_a_file_system("raw-custom.img");
+    let out = datareco(&[
+        "raw",
+        image.to_str().unwrap(),
+        "--signatures",
+        list.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Found 1 file by their contents"),
+        "{}",
+        stdout(&out)
+    );
+
+    std::fs::write(
+        &list,
+        "[[signature]]\nname = \"Bad\"\nextension = \"x\"\nheader = \"ZZ\"\n",
+    )
+    .unwrap();
+    let out = datareco(&[
+        "raw",
+        image.to_str().unwrap(),
+        "--signatures",
+        list.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("signature 1 (\"Bad\")"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_file(list).unwrap();
+    std::fs::remove_file(image).unwrap();
+}

@@ -125,7 +125,20 @@ export type SearchStatus = {
 };
 
 /** File-system kinds, as `FsKind` in crates/partitions serializes them. */
-export type FsKind = "ntfs" | "fat12" | "fat16" | "fat32" | "exfat" | "ext2" | "ext3" | "ext4" | "refs" | "hfsplus" | "apfs";
+export type FsKind =
+  | "ntfs"
+  | "fat12"
+  | "fat16"
+  | "fat32"
+  | "exfat"
+  | "ext2"
+  | "ext3"
+  | "ext4"
+  | "refs"
+  | "hfsplus"
+  | "apfs"
+  /** Files found by their contents (raw recovery). */
+  | "raw";
 
 /** A volume the file browser can offer (see src-tauri/src/files.rs). */
 export type VolumeChoice = {
@@ -155,7 +168,9 @@ export type EntryId =
   | { kind: "fixedRoot" }
   | { kind: "record"; number: number }
   | { kind: "orphans" }
-  | { kind: "lostFolder"; number: number };
+  | { kind: "lostFolder"; number: number }
+  | { kind: "span"; offset: number; length: number }
+  | { kind: "group"; index: number };
 
 export type OpenedVolume = { info: FsVolumeInfo; root: EntryId };
 
@@ -215,6 +230,26 @@ export type ScanStatus = {
   volumes: FoundVolume[] | null;
 };
 
+export type RawProgress = { start: number; position: number; end: number; done: boolean; files: number };
+
+/** A raw scan: how it's going, and (when done or paused) the files found. */
+export type RawStatus = {
+  progress: RawProgress;
+  /** The volume key of the files found, for the file browser. */
+  volume: string | null;
+  /** Files found, by extension. */
+  counts: [string, number][];
+};
+
+export type SignaturesInfo = {
+  /** Where the user's signature list is (or would be). */
+  path: string;
+  /** Whether it exists; if not, the built-in list is used. */
+  custom: boolean;
+  count: number;
+  problem: string | null;
+};
+
 export type RecoverProgress = {
   files: number;
   folders: number;
@@ -242,7 +277,8 @@ export type CommandError = {
     | "damaged"
     | "destination"
     | "stopped"
-    | "saved_scan";
+    | "saved_scan"
+    | "signatures";
   message: string;
 };
 
@@ -300,6 +336,17 @@ export const api = {
   scanResults: (id: string) => invoke<ScanStatus>("scan_results", { id }),
   saveScan: (id: string, path: string) => invoke<void>("save_scan", { id, path }),
   openSavedScan: (id: string, path: string) => invoke<ScanStatus>("open_saved_scan", { id, path }),
+  /** Starts a raw scan (files by their contents) of the whole source. */
+  startRawScan: (id: string) => invoke<RawStatus>("start_raw_scan", { id }),
+  continueRawScan: (id: string) => invoke<RawStatus>("continue_raw_scan", { id }),
+  /** What a (paused) raw scan has found so far. */
+  rawResults: (id: string) => invoke<RawStatus>("raw_results", { id }),
+  saveRawScan: (id: string, path: string) => invoke<void>("save_raw_scan", { id, path }),
+  openSavedRawScan: (id: string, path: string) => invoke<RawStatus>("open_saved_raw_scan", { id, path }),
+  signaturesInfo: () => invoke<SignaturesInfo>("signatures_info"),
+  /** Shows the user's signature list, creating it from the built-in one. */
+  openSignatures: () => invoke<void>("open_signatures"),
+
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

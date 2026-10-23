@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use datareco_fs::{Entry, resolve};
+use datareco_fs::{Entry, FileSystem, resolve};
 use datareco_io::{Disk, SourceSpec};
 use datareco_scan::{
     Control, FoundVolume, RecoverError, RecoverOptions, SavedScan, Scan, ScanError, ScanMode,
@@ -198,35 +198,45 @@ pub fn recover(request: &RecoverRequest) -> Result<(), CliError> {
             .collect::<Result<_, _>>()?
     };
     let source_text = format!("{}, {}", spec.display_name(), describe(fs.as_ref()));
-    let mut shown = Instant::now();
-    let summary = datareco_scan::recover(
+    save_items(
         fs.as_ref(),
         &source_text,
         &items,
         request.to,
         request.options,
-        &mut |p| {
-            if shown.elapsed() >= Duration::from_millis(250) {
-                let current: String = p
-                    .current
-                    .chars()
-                    .rev()
-                    .take(40)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                eprint!(
-                    "\rSaving… {} files, {} folders, {}  {current:<40}",
-                    p.files,
-                    p.folders,
-                    format_size(p.bytes)
-                );
-                shown = Instant::now();
-            }
-            Control::Continue
-        },
-    )?;
+    )
+}
+
+/// Saves `items` from `fs` into `to`, showing progress, then says how it went.
+pub fn save_items(
+    fs: &dyn FileSystem,
+    source_text: &str,
+    items: &[Entry],
+    to: &Path,
+    options: RecoverOptions,
+) -> Result<(), CliError> {
+    let mut shown = Instant::now();
+    let summary = datareco_scan::recover(fs, source_text, items, to, options, &mut |p| {
+        if shown.elapsed() >= Duration::from_millis(250) {
+            let current: String = p
+                .current
+                .chars()
+                .rev()
+                .take(40)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            eprint!(
+                "\rSaving… {} files, {} folders, {}  {current:<40}",
+                p.files,
+                p.folders,
+                format_size(p.bytes)
+            );
+            shown = Instant::now();
+        }
+        Control::Continue
+    })?;
     eprintln!("\r{:<100}", "");
     let p = &summary.progress;
     println!(
@@ -247,7 +257,7 @@ pub fn recover(request: &RecoverRequest) -> Result<(), CliError> {
 }
 
 /// "3 files and 1 folder", "1 file", "2 folders", "nothing".
-fn counted(files: u64, folders: u64) -> String {
+pub fn counted(files: u64, folders: u64) -> String {
     let one = |n: u64, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
     match (files, folders) {
         (0, 0) => "nothing".to_owned(),

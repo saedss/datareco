@@ -6,6 +6,7 @@ import {
   FileEntry,
   FoundVolume,
   FsVolumeInfo,
+  RawStatus,
   RecoverProgress,
   RecoverSummary,
   ScanStatus,
@@ -20,6 +21,8 @@ type Props = {
   sectorSize: number;
   /** The latest scan: its volumes are offered next to the partition table's. */
   scan: ScanStatus | null;
+  /** The latest raw scan: its files are offered as a volume too. */
+  raw: RawStatus | null;
   /** A volume to show, by key (from the scan view); `nonce` changes with each request. */
   request: { key: string; nonce: number } | null;
   /** Shows a byte range of the source in the sector view. */
@@ -52,7 +55,7 @@ const IMAGE_TYPES: Record<string, string> = {
 
 /** Browses the FAT, exFAT and NTFS volumes of a source, deleted files
  *  included, and saves files from them. */
-export function FileBrowser({ sourceId, sectorSize, scan, request, onShowInSectors }: Props) {
+export function FileBrowser({ sourceId, sectorSize, scan, raw, request, onShowInSectors }: Props) {
   const [volumes, setVolumes] = useState<VolumeChoice[] | null>(null);
   const [volumeKey, setVolumeKey] = useState<string | null>(null);
   const [volume, setVolume] = useState<FsVolumeInfo | null>(null);
@@ -125,6 +128,7 @@ export function FileBrowser({ sourceId, sectorSize, scan, request, onShowInSecto
   const deletedCount = entries?.filter((e) => e.deleted).length ?? 0;
   const checkedEntries = shown.filter((e) => checked.has(entryKey(e)));
   const scanVolumes = scan?.volumes ?? [];
+  const rawFiles = raw?.counts.reduce((sum, [, n]) => sum + n, 0) ?? 0;
   const running = recovery?.running ?? false;
 
   function open(entry: FileEntry) {
@@ -174,7 +178,8 @@ export function FileBrowser({ sourceId, sectorSize, scan, request, onShowInSecto
     }
   }
 
-  const noReadable = volumes && !volumes.some((v) => v.readable) && scanVolumes.length === 0;
+  const noReadable = volumes && !volumes.some((v) => v.readable) && scanVolumes.length === 0 && !raw?.volume;
+
   if (noReadable) {
     return (
       <div className="notice">
@@ -212,6 +217,13 @@ export function FileBrowser({ sourceId, sectorSize, scan, request, onShowInSecto
                     {foundText(v, i)}
                   </option>
                 ))}
+              </optgroup>
+            )}
+            {raw?.volume && (
+              <optgroup label="Found by their contents">
+                <option value={raw.volume}>
+                  {formatNumber(rawFiles)} files found by a raw scan{raw.progress.done ? "" : " (so far)"}
+                </option>
               </optgroup>
             )}
           </select>
@@ -349,9 +361,11 @@ export function FileBrowser({ sourceId, sectorSize, scan, request, onShowInSecto
             />
           ) : (
             <p className="muted panel-section">
-              {volume
-                ? `${volume.name}${volume.label ? ` "${volume.label}"` : ""}, ${formatSize(volume.size)}, cluster size ${formatSize(volume.clusterSize)}. Select a file to see its details; tick files and folders to recover them.`
-                : "Opening the volume…"}
+              {!volume
+                ? "Opening the volume…"
+                : volume.kind === "raw"
+                  ? "Files found by their contents, in a folder per kind. Their names, folders and times are lost. Select a file to preview it; tick files or folders to recover them."
+                  : `${volume.name}${volume.label ? ` "${volume.label}"` : ""}, ${formatSize(volume.size)}, cluster size ${formatSize(volume.clusterSize)}. Select a file to see its details; tick files and folders to recover them.`}
             </p>
           )}
         </aside>

@@ -365,3 +365,258 @@ fn destinations_on_the_source_disk_are_found() {
         disks_of_source(&SourceSpec::Image(Path::new("x.img").to_owned()), &devices).is_empty()
     );
 }
+
+mod raw {
+    //! Raw recovery: files found by their contents.
+
+    use std::sync::Arc;
+
+    use datareco_fs::testutil::{
+        FatBuilder, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, disk, noise, text,
+    };
+    use datareco_fs::{Entry, FileSystem, FsKind};
+
+    use crate::raw::{RawScan, SavedRawScan, default_signatures, parse_signatures};
+    use crate::{Control, RecoverOptions, recover};
+
+    pub fn png(seed: u64, len: usize) -> Vec<u8> {
+        let chunk = |kind: &[u8], data: &[u8]| {
+            let len = u32::try_from(data.len()).unwrap().to_be_bytes();
+            [&len[..], kind, data, &[0x12, 0x34, 0x56, 0x78]].concat()
+        };
+        [
+            &b"\x89PNG\r\n\x1a\n"[..],
+            &chunk(b"IHDR", &[0, 0, 0, 16, 0, 0, 0, 16, 8, 2, 0, 0, 0]),
+            &chunk(b"IDAT", &noise(seed, len)),
+            &chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// A JPEG with a thumbnail (its own start and end markers) in APP1, and
+    /// image data with stuffed FF bytes and restart markers.
+    pub fn jpeg(seed: u64, len: usize) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        out.extend(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        out.extend([
+            0xFF, 0xE1, 0x00, 0x0A, 0xFF, 0xD8, 0x11, 0x22, 0xFF, 0xD9, 0x00, 0x00,
+        ]);
+        out.extend([0xFF, 0xDB, 0x00, 0x05, 0x00, 0x01, 0x02]);
+        out.extend([0xFF, 0xDA, 0x00, 0x04, 0x01, 0x00]);
+        for (i, b) in noise(seed, len).into_iter().enumerate() {
+            out.push(b);
+            if b == 0xFF {
+                out.push(0x00);
+            }
+            if i % 1000 == 999 {
+                out.extend([0xFF, 0xD0 + u8::try_from(i / 1000 % 8).unwrap()]);
+            }
+        }
+        out.extend([0xFF, 0xD9]);
+        out
+    }
+
+    pub fn wav(seed: u64, len: usize) -> Vec<u8> {
+        let mut out =
+            b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1F\0\0\x80\x3E\0\0\x02\0\x10\0data"
+                .to_vec();
+        out.extend(u32::try_from(len).unwrap().to_le_bytes());
+        out.extend(noise(seed, len));
+        let riff = u32::try_from(out.len() - 8).unwrap();
+        out[4..8].copy_from_slice(&riff.to_le_bytes());
+        out
+    }
+
+    pub fn pdf(seed: &str, len: usize) -> Vec<u8> {
+        let mut out = b"%PDF-1.4\n1 0 obj\n<< /Length 0 >>\nstream\n".to_vec();
+        out.extend(text(seed, len));
+        out.extend(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        out
+    }
+
+    /// Files laid one after another on a disk with no file system, each at
+    /// the start of a sector, with noise between them.
+    fn bare_disk(files: &[Vec<u8>]) -> (Vec<u8>, Vec<u64>) {
+        let mut image = noise(77, 3 * 512);
+        let mut offsets = Vec::new();
+        for (i, file) in files.iter().enumerate() {
+            offsets.push(image.len() as u64);
+            image.extend(file);
+            image.resize(image.len().next_multiple_of(512), 0);
+            image.extend(noise(100 + i as u64, 2 * 512));
+        }
+        (image, offsets)
+    }
+
+    fn found(fs: &dyn FileSystem) -> Vec<(Entry, Vec<u8>)> {
+        let mut all = Vec::new();
+        for group in fs.list(&fs.root()).unwrap() {
+            for file in fs.list(&group.id).unwrap() {
+                let data = datareco_fs::read_to_end(fs, &file.id, None, u64::MAX).unwrap();
+                all.push((file, data));
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn files_are_found_by_their_contents() {
+        let files = vec![
+            jpeg(1, 9000),
+            png(2, 3000),
+            wav(3, 5000),
+            pdf("doc", 4000),
+            jpeg(4, 300),
+        ];
+        let (image, offsets) = bare_disk(&files);
+        let disk = disk(image);
+        let volume = RawScan::run(&disk, default_signatures(), None).unwrap();
+        assert_eq!(volume.info().kind, FsKind::Raw);
+        let all = found(&volume);
+        let names: Vec<&String> = all.iter().map(|(e, _)| &e.name).collect();
+        assert_eq!(all.len(), files.len(), "{names:?}");
+        let kinds = ["jpg", "png", "wav", "pdf", "jpg"];
+        for ((file, offset), extension) in files.iter().zip(&offsets).zip(kinds) {
+            let name = format!("f{:010}.{extension}", offset / 512);
+            let (entry, data) = all
+                .iter()
+                .find(|(e, _)| e.name == name)
+                .unwrap_or_else(|| panic!("no {name} in {names:?}"));
+            assert_eq!(data, file, "{}", entry.name);
+            assert!(
+                entry
+                    .note
+                    .as_deref()
+                    .unwrap()
+                    .contains("Found by its contents")
+            );
+        }
+        let groups: Vec<String> = volume
+            .list(&volume.root())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(groups, ["JPG", "PDF", "PNG", "WAV"]);
+    }
+
+    #[test]
+    fn a_file_whose_end_is_unknown_is_cut_at_the_next_one() {
+        let mut psd = b"8BPS\x00\x01".to_vec();
+        psd.extend(noise(9, 2000));
+        let (image, offsets) = bare_disk(&[psd, png(5, 1000)]);
+        let disk = disk(image);
+        let volume = RawScan::run(&disk, default_signatures(), None).unwrap();
+        let all = found(&volume);
+        let psd = all.iter().find(|(e, _)| e.name.ends_with(".psd")).unwrap();
+        assert_eq!(psd.0.size, offsets[1] - offsets[0]);
+        assert!(psd.0.note.as_deref().unwrap().contains("end wasn't found"));
+    }
+
+    #[test]
+    fn custom_signatures_with_a_footer_or_a_size_field() {
+        let list = parse_signatures(
+            r#"
+            [[signature]]
+            name = "Footer"
+            extension = "ftr"
+            header = "53 54 41 52 54"
+            footer = "45 4E 44 21"
+
+            [[signature]]
+            name = "Field"
+            extension = "fld"
+            header = "46 4C 44 21"
+            size_field = { offset = 4, bytes = 2, endian = "big", add = 6 }
+            "#,
+        )
+        .unwrap();
+        let footer = [&b"START"[..], &noise(1, 700), b"END!"].concat();
+        let mut field = b"FLD!\x01\x2C".to_vec();
+        field.extend(noise(2, 300));
+        let (image, _) = bare_disk(&[footer.clone(), field.clone()]);
+        let volume = RawScan::run(&disk(image), list, None).unwrap();
+        let all = found(&volume);
+        let get = |extension: &str| {
+            all.iter()
+                .find(|(e, _)| e.name.ends_with(extension))
+                .unwrap()
+                .1
+                .clone()
+        };
+        assert_eq!(get(".ftr"), footer);
+        assert_eq!(get(".fld"), field);
+    }
+
+    #[test]
+    fn files_come_back_after_an_ntfs_volume_was_quick_formatted() {
+        // Like the ntfs-reformatted test image: the format destroyed the
+        // MFT, but the files' contents are still on the disk.
+        let mut b = NtfsBuilder::new(2048);
+        // Data written early sits where the new FAT goes; these come after.
+        b.alloc(40);
+        let photos = b.mkdir(NTFS_ROOT, "Photos");
+        let photo = png(11, 3 * NTFS_CLUSTER);
+        let song = wav(12, 5 * NTFS_CLUSTER);
+        b.file(photos, "beach.png", &photo);
+        b.file(NTFS_ROOT, "song.wav", &song);
+        let mut image = b.build();
+        let fat = FatBuilder::new(FsKind::Fat32, image.len() / 512).build();
+        image[..160 * 1024].copy_from_slice(&fat[..160 * 1024]);
+        // Lose the MFT's second part too, as on the test image.
+        let mft2 = (2048 - 16) * NTFS_CLUSTER;
+        image[mft2..mft2 + 8 * NTFS_CLUSTER].fill(0);
+
+        let volume = RawScan::run(&disk(image), default_signatures(), None).unwrap();
+        let all = found(&volume);
+        assert!(
+            all.iter()
+                .any(|(e, d)| e.name.ends_with(".png") && *d == photo)
+        );
+        assert!(
+            all.iter()
+                .any(|(e, d)| e.name.ends_with(".wav") && *d == song)
+        );
+    }
+
+    #[test]
+    fn a_raw_scan_can_be_saved_and_carried_on_and_recovered_from() {
+        let files: Vec<Vec<u8>> = (0..6).map(|i| png(20 + i, 4000)).collect();
+        let (image, _) = bare_disk(&files);
+        let disk = disk(image);
+        let expected: Vec<Vec<u8>> =
+            found(&RawScan::run(&disk, default_signatures(), None).unwrap())
+                .into_iter()
+                .map(|(_, d)| d)
+                .collect();
+        assert_eq!(expected, files);
+
+        let mut scan = RawScan::new(&disk, default_signatures(), None);
+        scan.step(&disk, disk.size() / 2).unwrap();
+        let saved = scan.save("image:x.img", &disk);
+        let json = serde_json::to_string(&saved).unwrap();
+        let saved: SavedRawScan = serde_json::from_str(&json).unwrap();
+        let mut resumed = RawScan::restore(&disk, default_signatures(), &saved).unwrap();
+        while !resumed.step(&disk, 4096).unwrap().done {}
+        let volume = resumed.volume(Arc::clone(&disk));
+        let again: Vec<Vec<u8>> = found(&volume).into_iter().map(|(_, d)| d).collect();
+        assert_eq!(again, files);
+
+        // Recovering everything puts each kind in its own folder.
+        let destination = super::temp_folder("raw-recovered");
+        let items = volume.list(&volume.root()).unwrap();
+        let summary = recover(
+            &volume,
+            "raw",
+            &items,
+            &destination,
+            RecoverOptions::default(),
+            &mut |_| Control::Continue,
+        )
+        .unwrap();
+        assert_eq!(summary.progress.files, 6);
+        let saved = std::fs::read_dir(destination.join("PNG")).unwrap().count();
+        assert_eq!(saved, 6);
+        std::fs::remove_dir_all(destination).unwrap();
+    }
+}

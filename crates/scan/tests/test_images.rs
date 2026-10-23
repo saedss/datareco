@@ -8,8 +8,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use datareco_fs::FsKind;
+use datareco_fs::{FileSystem, FsKind, read_to_end};
 use datareco_io::{Disk, SourceSpec};
+use datareco_scan::raw::{RawScan, default_signatures};
 use datareco_scan::{Control, RecoverOptions, Scan, ScanMode, VolumeState, open_found, recover};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -133,4 +134,76 @@ fn the_old_volume_is_found_after_a_quick_format() {
         .unwrap_or_else(|| panic!("the old NTFS volume wasn't found: {found:#?}"));
     assert_eq!((old.offset, old.state), (0, VolumeState::FromBackup));
     assert!(open_found(Arc::clone(&disk), old).is_ok());
+}
+
+/// Every file a raw scan of the image found, as (size, SHA-256).
+fn found_by_contents(disk: &Arc<Disk>) -> HashSet<(u64, String)> {
+    let volume = RawScan::run(disk, default_signatures(), None).unwrap();
+    let mut files = HashSet::new();
+    for group in volume.list(&volume.root()).unwrap() {
+        for file in volume.list(&group.id).unwrap() {
+            let data = read_to_end(&volume, &file.id, None, u64::MAX).unwrap();
+            files.insert((data.len() as u64, sha256(&data)));
+        }
+    }
+    files
+}
+
+/// The image's files a raw scan should find: the kinds with signatures,
+/// stored in one piece. Deleted ones too: their contents are still there.
+fn findable(image: &Value) -> Vec<(String, u64, String)> {
+    image["volumes"][0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| {
+            matches!(
+                f["kind"].as_str(),
+                Some("png" | "bmp" | "wav" | "zip" | "pdf")
+            )
+        })
+        .filter(|f| f["extents"].as_u64() == Some(1))
+        .map(|f| {
+            (
+                f["path"].as_str().unwrap().to_owned(),
+                f["size"].as_u64().unwrap(),
+                f["sha256"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn raw_recovery_finds_the_files_in_fat32_without_its_fat() {
+    let Some((dir, images)) = images() else {
+        return;
+    };
+    let (disk, image) = open(&dir, &images, "fat32-no-fat");
+    let found = found_by_contents(&disk);
+    let wanted = findable(&image);
+    assert!(!wanted.is_empty());
+    for (path, size, hash) in wanted {
+        assert!(
+            found.contains(&(size, hash)),
+            "{path} wasn't found by its contents"
+        );
+    }
+}
+
+#[test]
+fn raw_recovery_brings_back_files_after_the_ntfs_quick_format() {
+    // The format overwrote the old volume's MFT, but not the files' contents.
+    let Some((dir, images)) = images() else {
+        return;
+    };
+    let (disk, image) = open(&dir, &images, "ntfs-reformatted");
+    let found = found_by_contents(&disk);
+    let wanted = findable(&image);
+    assert!(!wanted.is_empty());
+    for (path, size, hash) in wanted {
+        assert!(
+            found.contains(&(size, hash)),
+            "{path} wasn't found by its contents"
+        );
+    }
 }

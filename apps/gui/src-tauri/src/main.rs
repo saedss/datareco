@@ -5,6 +5,7 @@
 
 mod files;
 mod partitions;
+mod raw;
 mod scans;
 mod structures;
 
@@ -206,8 +207,9 @@ fn main() {
         .manage(files::Recoveries::default())
         .manage(scans::Scans::default())
         .setup(|app| {
-            let folder = app.path().app_config_dir()?.join("templates");
-            app.manage(Templates::load(folder));
+            let config = app.path().app_config_dir()?;
+            app.manage(Templates::load(config.join("templates")));
+            app.manage(raw::RawScans::new(config.join("signatures.toml")));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -239,6 +241,13 @@ fn main() {
             scans::scan_results,
             scans::save_scan,
             scans::open_saved_scan,
+            raw::start_raw_scan,
+            raw::continue_raw_scan,
+            raw::raw_results,
+            raw::save_raw_scan,
+            raw::open_saved_raw_scan,
+            raw::signatures_info,
+            raw::open_signatures,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

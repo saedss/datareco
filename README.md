@@ -3,12 +3,13 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 5).** DataReco lists your disks and volumes,
+> **Status: early development (Phase 6).** DataReco lists your disks and volumes,
 > has a read-only disk editor (hex view, search, bookmarks, structure templates),
 > reads and checks MBR and GPT partition tables, finds lost partitions, browses
 > NTFS, FAT and exFAT volumes (deleted files included), scans disks for lost and
-> damaged volumes, and recovers files to another disk. Recovery by file signature
-> comes next; see the [roadmap](docs/ROADMAP.md).
+> damaged volumes, recovers files to another disk, and finds files by their
+> contents when no file system is left. Disk imaging comes next; see the
+> [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -42,6 +43,11 @@ when they run as administrator; image files work without. The desktop app offers
   volumes whose boot sector, partition entry or FAT is gone, and NTFS files from
   before a format. Scans can be paused, saved and carried on later. **Browse files**
   opens a volume it found in the Files view.
+- **Raw scan** (in Scan) finds files by their contents (photos, documents,
+  archives, music, video) when no file system says where they are, for example
+  after a format. What it finds opens in the Files view in a folder per kind,
+  ready to preview and recover. **Edit signatures…** opens the list of what it
+  looks for, to change it or add your own.
 
 `datareco-gui --open disk0` starts on a given source.
 
@@ -68,6 +74,12 @@ datareco scan disk1 --full --save disk1.drscan         # find lost and damaged v
 datareco scan disk1 --resume disk1.drscan              # carry on after stopping it
 datareco ls disk1 --scan disk1.drscan --volume 2 -r    # look inside a volume it found
 datareco recover disk1 --scan disk1.drscan --volume 2 --to D:\Recovered
+datareco raw disk1 --to D:\Recovered                   # find files by their contents, save them
+datareco raw disk1 -p 2 --save disk1.drraw             # only partition 2; keep the results
+datareco ls disk1 --raw disk1.drraw -r                 # what that raw scan found
+datareco signatures                                    # what raw scans look for
+datareco signatures --write my-signatures.toml         # a copy to edit; use with --signatures
+
 ```
 
 Recovering saves each file with its times, and writes a log (what was saved, what

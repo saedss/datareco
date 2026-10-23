@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { FoundVolume, ScanStatus, api, toCommandError } from "../api";
+import { FoundVolume, RawStatus, ScanStatus, api, toCommandError } from "../api";
 import { formatNumber, formatSize } from "../format";
+import { RawScanPanel } from "./RawScanPanel";
 
 type Props = {
   sourceId: string;
@@ -9,6 +10,9 @@ type Props = {
   /** The latest scan, kept by the editor so the file browser can offer its volumes. */
   status: ScanStatus | null;
   onStatus: (status: ScanStatus) => void;
+  /** The latest raw scan (files found by their contents). */
+  raw: RawStatus | null;
+  onRaw: (status: RawStatus) => void;
   /** Opens a found volume in the file browser, by its volume key. */
   onBrowse: (key: string) => void;
   /** Shows a byte offset of the source in the sector view. */
@@ -18,7 +22,7 @@ type Props = {
 const SCAN_FILES = [{ name: "DataReco scan", extensions: ["drscan"] }];
 
 /** Scans for volumes, lost and damaged ones included, and lists them best first. */
-export function ScanView({ sourceId, sectorSize, status, onStatus, onBrowse, onShowInSectors }: Props) {
+export function ScanView({ sourceId, sectorSize, status, onStatus, raw, onRaw, onBrowse, onShowInSectors }: Props) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -140,6 +144,9 @@ export function ScanView({ sourceId, sectorSize, status, onStatus, onBrowse, onS
           onShowInSectors={onShowInSectors}
         />
       )}
+
+      <RawScanPanel sourceId={sourceId} status={raw} onStatus={onRaw} onBrowse={onBrowse} />
+
     </div>
   );
 }

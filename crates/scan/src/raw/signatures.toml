@@ -1,0 +1,167 @@
+# DataReco file signatures: how raw recovery recognizes files by their contents.
+#
+# Each [[signature]] has:
+#   name          what the files are, e.g. "JPEG image"
+#   extension     what recovered files are called, e.g. "jpg"
+#   header        the bytes a file starts with, in hex; ?? stands for any byte
+#   header_offset where the header is in the file (default 0)
+# and one way to find where a file ends:
+#   size          a format DataReco understands and checks: jpeg, png, gif, bmp,
+#                 tiff, riff, zip, pdf, isobmff, mp3, ogg, ebml, 7z, rar, sqlite,
+#                 ole, pe
+#   footer        the bytes a file ends with, in hex (searched for up to max_size)
+#   size_field    where the header stores the size:
+#                 { offset = 2, bytes = 4, endian = "little", add = 0 }
+# With none of them, a file is cut at the next file found, or at max_size.
+#   max_size      the largest file to expect, e.g. "200 MiB" (default 64 MiB)
+#   min_size      smaller files are ignored (default 0)
+#   enabled       false leaves the signature out (default true)
+
+[[signature]]
+name = "JPEG image"
+extension = "jpg"
+header = "FF D8 FF"
+size = "jpeg"
+max_size = "200 MiB"
+
+[[signature]]
+name = "PNG image"
+extension = "png"
+header = "89 50 4E 47 0D 0A 1A 0A"
+size = "png"
+max_size = "200 MiB"
+
+[[signature]]
+name = "GIF image"
+extension = "gif"
+header = "47 49 46 38 ?? 61"
+size = "gif"
+max_size = "100 MiB"
+
+[[signature]]
+name = "BMP image"
+extension = "bmp"
+header = "42 4D ?? ?? ?? ?? 00 00 00 00"
+size = "bmp"
+max_size = "200 MiB"
+
+[[signature]]
+name = "TIFF image or camera raw (little-endian)"
+extension = "tif"
+header = "49 49 2A 00"
+size = "tiff"
+max_size = "200 MiB"
+
+[[signature]]
+name = "TIFF image or camera raw (big-endian)"
+extension = "tif"
+header = "4D 4D 00 2A"
+size = "tiff"
+max_size = "200 MiB"
+
+[[signature]]
+name = "WAV, AVI or WebP (RIFF)"
+extension = "riff"
+header = "52 49 46 46"
+size = "riff"
+max_size = "4 GiB"
+
+[[signature]]
+name = "ZIP archive or Office document"
+extension = "zip"
+header = "50 4B 03 04"
+size = "zip"
+max_size = "4 GiB"
+
+[[signature]]
+name = "PDF document"
+extension = "pdf"
+header = "25 50 44 46 2D"
+size = "pdf"
+max_size = "500 MiB"
+
+[[signature]]
+name = "MP4, MOV or HEIC (ISO media)"
+extension = "mp4"
+header = "66 74 79 70"
+header_offset = 4
+size = "isobmff"
+max_size = "16 GiB"
+
+[[signature]]
+name = "MP3 audio with an ID3 tag"
+extension = "mp3"
+header = "49 44 33"
+size = "mp3"
+max_size = "200 MiB"
+
+[[signature]]
+name = "Ogg audio or video"
+extension = "ogg"
+header = "4F 67 67 53 00 02"
+size = "ogg"
+max_size = "1 GiB"
+
+[[signature]]
+name = "Matroska or WebM video"
+extension = "mkv"
+header = "1A 45 DF A3"
+size = "ebml"
+max_size = "16 GiB"
+
+[[signature]]
+name = "7-Zip archive"
+extension = "7z"
+header = "37 7A BC AF 27 1C"
+size = "7z"
+max_size = "16 GiB"
+
+[[signature]]
+name = "RAR archive"
+extension = "rar"
+header = "52 61 72 21 1A 07"
+size = "rar"
+max_size = "16 GiB"
+
+[[signature]]
+name = "SQLite database"
+extension = "sqlite"
+header = "53 51 4C 69 74 65 20 66 6F 72 6D 61 74 20 33 00"
+size = "sqlite"
+max_size = "4 GiB"
+
+[[signature]]
+name = "Word, Excel or PowerPoint 97-2003 (OLE)"
+extension = "ole"
+header = "D0 CF 11 E0 A1 B1 1A E1"
+size = "ole"
+max_size = "500 MiB"
+
+[[signature]]
+name = "Windows program (EXE or DLL)"
+extension = "exe"
+header = "4D 5A"
+size = "pe"
+max_size = "500 MiB"
+
+[[signature]]
+name = "Photoshop image"
+extension = "psd"
+header = "38 42 50 53 00 01"
+max_size = "500 MiB"
+
+[[signature]]
+name = "FLAC audio"
+extension = "flac"
+header = "66 4C 61 43 00 00 00 22"
+max_size = "200 MiB"
+
+# An example of a footer: web pages saved with a doctype. Off by default,
+# because browser caches hold thousands of them.
+[[signature]]
+name = "HTML page"
+extension = "html"
+header = "3C 21 44 4F 43 54 59 50 45 20 68 74 6D 6C"
+footer = "3C 2F 68 74 6D 6C 3E"
+max_size = "20 MiB"
+enabled = false

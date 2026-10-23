@@ -23,6 +23,8 @@ pub enum FsKind {
     Refs,
     HfsPlus,
     Apfs,
+    /// Not a file system: files found by their contents (raw recovery).
+    Raw,
 }
 
 impl FsKind {
@@ -39,6 +41,7 @@ impl FsKind {
             FsKind::Refs => "ReFS",
             FsKind::HfsPlus => "HFS+",
             FsKind::Apfs => "APFS",
+            FsKind::Raw => "Raw",
         }
     }
 }
