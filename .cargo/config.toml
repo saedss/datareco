@@ -1,0 +1,4 @@
+# Link Microsoft's C runtime into the executables, so datareco.exe and the
+# desktop app run on PCs without the Visual C++ redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
