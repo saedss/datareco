@@ -3,6 +3,7 @@
 // Release builds run without a console window on Windows. Do not remove.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod partitions;
 mod structures;
 
 use std::collections::HashMap;
@@ -198,6 +199,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenSources::default())
+        .manage(partitions::Searches::default())
         .setup(|app| {
             let folder = app.path().app_config_dir()?.join("templates");
             app.manage(Templates::load(folder));
@@ -215,6 +217,10 @@ fn main() {
             structures::detect_templates,
             structures::decode_template,
             structures::open_templates_folder,
+            partitions::read_partitions,
+            partitions::start_partition_search,
+            partitions::continue_partition_search,
+            partitions::stop_partition_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

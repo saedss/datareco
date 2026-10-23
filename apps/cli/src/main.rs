@@ -1,6 +1,7 @@
 //! `datareco` command-line tool. Uses the same engine crates as the desktop app.
 
 mod format;
+mod partitions;
 mod structures;
 
 use std::fmt;
@@ -92,6 +93,19 @@ enum Command {
         #[arg(long)]
         templates_dir: Option<PathBuf>,
     },
+    /// Show the partition table, with file systems and problems.
+    Partitions {
+        /// A disk (disk0) or image file path.
+        source: String,
+    },
+    /// Search for lost partitions (after a wiped or damaged partition table).
+    FindPartitions {
+        /// A disk (disk0) or image file path.
+        source: String,
+        /// Look at every sector instead of only where partitions usually start.
+        #[arg(long)]
+        full: bool,
+    },
     /// Search a disk, volume or image file for text or bytes.
     Find {
         /// What to search: a disk (disk0), a volume (C:) or an image file path.
@@ -130,6 +144,8 @@ fn main() -> ExitCode {
             offset,
             templates_dir,
         } => structures::decode(&source, &template, sector, offset, templates_dir.as_deref()),
+        Command::Partitions { source } => partitions::show(&source),
+        Command::FindPartitions { source, full } => partitions::find(&source, full),
         Command::Find {
             source,
             text,

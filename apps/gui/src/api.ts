@@ -77,6 +77,53 @@ export type TemplateNode = {
   children: TemplateNode[];
 };
 
+export type FileSystemInfo = { kind: string; name: string; label: string | null; size: number | null };
+
+export type Partition = {
+  number: number;
+  kind: "primary" | "extended" | "logical" | "gpt";
+  startLba: number;
+  sectors: number;
+  typeCode: string;
+  typeName: string;
+  name: string | null;
+  guid: string | null;
+  bootable: boolean;
+  fileSystem: FileSystemInfo | null;
+};
+
+export type Problem = { severity: "info" | "warning" | "error"; message: string };
+
+export type PartitionTable = {
+  kind: "mbr" | "gpt" | "none";
+  sectorSize: number;
+  diskSectors: number;
+  diskId: string | null;
+  partitions: Partition[];
+  wholeDisk: FileSystemInfo | null;
+  problems: Problem[];
+};
+
+export type ScanMode = "quick" | "full";
+
+export type FoundPartition = {
+  startLba: number;
+  sectors: number;
+  fileSystem: FileSystemInfo | null;
+  typeCode: string | null;
+  typeName: string | null;
+  name: string | null;
+  confidence: "low" | "medium" | "high";
+  evidence: string[];
+  inTable: boolean;
+};
+
+export type SearchStatus = {
+  mode: ScanMode;
+  progress: { position: number; total: number; done: boolean; clues: number };
+  found: FoundPartition[];
+};
+
 export type CommandError = {
   kind: "access_denied" | "not_found" | "out_of_range" | "unsupported" | "io" | "template";
   message: string;
@@ -98,6 +145,12 @@ export const api = {
   decodeTemplate: (id: string, template: string, offset: number) =>
     invoke<TemplateNode>("decode_template", { id, template, offset }),
   openTemplatesFolder: () => invoke<void>("open_templates_folder"),
+  readPartitions: (id: string) => invoke<PartitionTable>("read_partitions", { id }),
+  /** Starts a lost-partition search and runs its first step. */
+  startPartitionSearch: (id: string, mode: ScanMode) =>
+    invoke<SearchStatus>("start_partition_search", { id, mode }),
+  continuePartitionSearch: (id: string) => invoke<SearchStatus>("continue_partition_search", { id }),
+  stopPartitionSearch: (id: string) => invoke<void>("stop_partition_search", { id }),
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),
 };

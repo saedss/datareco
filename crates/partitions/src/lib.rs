@@ -1,4 +1,21 @@
 //! Partition tables (MBR with extended/logical partitions, GPT) and the search
 //! for lost partitions using boot sectors, superblocks and their backups.
 //!
-//! Filled in by Phase 3 (see docs/ROADMAP.md).
+//! Everything here only reads. Disk data is untrusted: parsers use
+//! bounds-checked reads (`bytes` module) and never panic on garbage.
+
+mod boot;
+mod bytes;
+mod crc32;
+mod gpt;
+mod mbr;
+mod scan;
+mod table;
+#[cfg(test)]
+mod tests;
+
+pub use boot::{FileSystem, FsKind, identify};
+pub use scan::{Confidence, FoundPartition, Scan, ScanMode, ScanProgress};
+pub use table::{
+    Partition, PartitionKind, PartitionTable, Problem, Severity, TableKind, read_table,
+};

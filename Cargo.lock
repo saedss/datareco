@@ -596,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "datareco-io",
+ "datareco-partitions",
  "datareco-templates",
  "serde_json",
 ]
@@ -609,6 +610,7 @@ name = "datareco-gui"
 version = "0.1.0"
 dependencies = [
  "datareco-io",
+ "datareco-partitions",
  "datareco-templates",
  "serde",
  "serde_json",
@@ -635,6 +637,11 @@ dependencies = [
 [[package]]
 name = "datareco-partitions"
 version = "0.1.0"
+dependencies = [
+ "datareco-io",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "datareco-raid"
