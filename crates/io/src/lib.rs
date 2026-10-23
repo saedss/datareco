@@ -16,6 +16,7 @@ mod aligned;
 mod devices;
 mod disk;
 mod error;
+mod search;
 mod source;
 mod spec;
 
@@ -36,5 +37,6 @@ pub use devices::{
 };
 pub use disk::{BLOCK_SIZE, Disk, ReadOutcome, ReadPolicy};
 pub use error::{Error, Result};
+pub use search::SearchProgress;
 pub use source::{FileSource, MemorySource, SectorSource};
 pub use spec::SourceSpec;

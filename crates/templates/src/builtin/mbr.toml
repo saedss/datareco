@@ -1,0 +1,146 @@
+# MBR partition tables. Layout: https://en.wikipedia.org/wiki/Master_boot_record
+
+[[template]]
+id = "mbr"
+name = "Master Boot Record (MBR)"
+group = "Partition tables"
+description = "Sector 0 of a disk with an MBR partition table: boot code, four partition entries and the 55 AA signature. GPT disks keep a 'protective' MBR here."
+size = 512
+signature = [{ offset = 510, hex = "55 AA" }]
+
+[[template.field]]
+name = "Boot code"
+offset = 0
+type = "bytes"
+length = 440
+
+[[template.field]]
+name = "Disk signature"
+offset = 440
+type = "u32"
+format = "hex"
+description = "Windows uses this number to tell disks apart."
+
+[[template.field]]
+name = "Reserved"
+offset = 444
+type = "u16"
+format = "hex"
+
+[[template.field]]
+name = "Partitions"
+offset = 446
+type = "struct"
+template = "mbr_partition"
+count = 4
+
+[[template.field]]
+name = "Boot signature"
+offset = 510
+type = "u16"
+format = "hex"
+values = { "0xAA55" = "valid (55 AA)" }
+
+
+[[template]]
+id = "ebr"
+name = "Extended Boot Record (EBR)"
+group = "Partition tables"
+description = "First sector of each logical partition's slot inside an extended partition. Entry 1 describes the logical partition (start relative to this EBR); entry 2 points to the next EBR (start relative to the extended partition)."
+size = 512
+
+[[template.field]]
+name = "Unused"
+offset = 0
+type = "bytes"
+length = 446
+
+[[template.field]]
+name = "Partitions"
+offset = 446
+type = "struct"
+template = "mbr_partition"
+count = 4
+
+[[template.field]]
+name = "Boot signature"
+offset = 510
+type = "u16"
+format = "hex"
+values = { "0xAA55" = "valid (55 AA)" }
+
+
+[[template]]
+id = "mbr_partition"
+name = "MBR partition entry"
+group = "Partition tables"
+description = "One 16-byte entry of an MBR or EBR partition table."
+size = 16
+summary = "{type}, {first_sector_lba} + {sector_count}"
+
+[[template.field]]
+name = "Status"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0x00" = "inactive", "0x80" = "active (bootable)" }
+
+[[template.field]]
+name = "First sector (CHS)"
+offset = 1
+type = "chs"
+
+[[template.field]]
+name = "Type"
+offset = 4
+type = "u8"
+format = "hex"
+[template.field.values]
+"0x00" = "empty"
+"0x01" = "FAT12"
+"0x04" = "FAT16 (under 32 MB)"
+"0x05" = "extended (CHS)"
+"0x06" = "FAT16"
+"0x07" = "NTFS, exFAT or HPFS"
+"0x0B" = "FAT32 (CHS)"
+"0x0C" = "FAT32 (LBA)"
+"0x0E" = "FAT16 (LBA)"
+"0x0F" = "extended (LBA)"
+"0x11" = "hidden FAT12"
+"0x12" = "OEM diagnostics"
+"0x14" = "hidden FAT16 (under 32 MB)"
+"0x16" = "hidden FAT16"
+"0x17" = "hidden NTFS or exFAT"
+"0x1B" = "hidden FAT32 (CHS)"
+"0x1C" = "hidden FAT32 (LBA)"
+"0x1E" = "hidden FAT16 (LBA)"
+"0x27" = "Windows recovery (hidden NTFS)"
+"0x42" = "Windows dynamic disk (LDM)"
+"0x82" = "Linux swap"
+"0x83" = "Linux"
+"0x85" = "Linux extended"
+"0x8E" = "Linux LVM"
+"0xA5" = "FreeBSD"
+"0xA6" = "OpenBSD"
+"0xA8" = "Apple UFS"
+"0xAB" = "Apple boot"
+"0xAF" = "Apple HFS/HFS+"
+"0xEE" = "GPT protective"
+"0xEF" = "EFI system"
+"0xFB" = "VMware VMFS"
+"0xFD" = "Linux RAID"
+
+[[template.field]]
+name = "Last sector (CHS)"
+offset = 5
+type = "chs"
+
+[[template.field]]
+name = "First sector (LBA)"
+offset = 8
+type = "u32"
+
+[[template.field]]
+name = "Sector count"
+offset = 12
+type = "u32"

@@ -3,15 +3,21 @@
 // Release builds run without a console window on Windows. Do not remove.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod structures;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use datareco_io::{DeviceList, Disk, Error, SourceSpec};
+use datareco_io::{DeviceList, Disk, Error, SearchProgress, SourceSpec};
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-/// Most sectors one `read_sectors` call returns.
-const MAX_SECTORS_PER_READ: u32 = 64;
+use crate::structures::Templates;
+
+/// Most bytes one `read_bytes` call returns.
+const MAX_BYTES_PER_READ: u64 = 256 * 1024;
+/// Bytes one `find` call examines before reporting progress.
+const SEARCH_STEP: u64 = 64 << 20;
 
 /// Basic facts about the running app, shown in the status bar.
 #[derive(Serialize)]
@@ -39,20 +45,26 @@ fn start_source() -> Option<String> {
     None
 }
 
-/// An engine error as the frontend sees it.
+/// An error as the frontend sees it.
 #[derive(Debug, Serialize)]
 struct CommandError {
-    /// See `datareco_io::Error::kind`, e.g. "access_denied".
+    /// See `datareco_io::Error::kind`, e.g. "access_denied", or "template".
     kind: &'static str,
     message: String,
 }
 
+impl CommandError {
+    fn new(kind: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
 impl From<Error> for CommandError {
     fn from(error: Error) -> Self {
-        Self {
-            kind: error.kind(),
-            message: error.to_string(),
-        }
+        Self::new(error.kind(), error.to_string())
     }
 }
 
@@ -67,13 +79,13 @@ struct SourceInfo {
     sector_count: u64,
 }
 
-/// Sectors read from a source.
+/// Bytes read from a source.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SectorData {
-    lba: u64,
+struct ByteData {
+    offset: u64,
     data: Vec<u8>,
-    /// Sectors that couldn't be read; their bytes are zeros.
+    /// Sectors in the range that couldn't be read; their bytes are zeros.
     unreadable: Vec<u64>,
 }
 
@@ -97,6 +109,19 @@ impl OpenSources {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Disk>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Reads up to `length` bytes at `offset`, fewer at the end of the source.
+fn read_range(disk: &Disk, offset: u64, length: u64) -> Result<ByteData, CommandError> {
+    let length = length.min(disk.size().saturating_sub(offset));
+    let mut data =
+        vec![0; usize::try_from(length).map_err(|_| CommandError::new("io", "read too large"))?];
+    let outcome = disk.read_at(offset, &mut data)?;
+    Ok(ByteData {
+        offset,
+        data,
+        unreadable: outcome.unreadable,
+    })
 }
 
 #[tauri::command]
@@ -132,19 +157,28 @@ fn open_source(sources: State<'_, OpenSources>, id: String) -> Result<SourceInfo
 }
 
 #[tauri::command(async)]
-fn read_sectors(
+fn read_bytes(
     sources: State<'_, OpenSources>,
     id: String,
-    lba: u64,
-    count: u32,
-) -> Result<SectorData, CommandError> {
+    offset: u64,
+    length: u64,
+) -> Result<ByteData, CommandError> {
     let disk = sources.get_or_open(&id)?;
-    let (data, outcome) = disk.read_sectors(lba, count.clamp(1, MAX_SECTORS_PER_READ))?;
-    Ok(SectorData {
-        lba,
-        data,
-        unreadable: outcome.unreadable,
-    })
+    read_range(&disk, offset, length.min(MAX_BYTES_PER_READ))
+}
+
+/// Searches one step (64 MiB) from `from`; the frontend calls again with
+/// `next` until something is found, showing progress in between.
+#[tauri::command(async)]
+fn find(
+    sources: State<'_, OpenSources>,
+    id: String,
+    pattern: Vec<u8>,
+    from: u64,
+    ignore_case: bool,
+) -> Result<SearchProgress, CommandError> {
+    let disk = sources.get_or_open(&id)?;
+    Ok(disk.find(&pattern, from, SEARCH_STEP, ignore_case)?)
 }
 
 /// Restarts the app with administrator rights (Windows shows its UAC prompt),
@@ -164,12 +198,23 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenSources::default())
+        .setup(|app| {
+            let folder = app.path().app_config_dir()?.join("templates");
+            app.manage(Templates::load(folder));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             list_devices,
             open_source,
-            read_sectors,
-            restart_as_admin
+            read_bytes,
+            find,
+            restart_as_admin,
+            structures::list_templates,
+            structures::reload_templates,
+            structures::detect_templates,
+            structures::decode_template,
+            structures::open_templates_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

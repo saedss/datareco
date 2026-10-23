@@ -14,9 +14,9 @@
       {
         "label": "main",
         "title": "DataReco",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 900,
+        "width": 1400,
+        "height": 880,
+        "minWidth": 960,
         "minHeight": 600,
         "center": true
       }

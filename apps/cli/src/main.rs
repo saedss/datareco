@@ -1,13 +1,47 @@
 //! `datareco` command-line tool. Uses the same engine crates as the desktop app.
 
 mod format;
+mod structures;
 
+use std::fmt;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use datareco_io::{DeviceList, Disk, Error, SourceSpec, VolumeInfo, is_elevated, list_devices};
 
 use crate::format::{format_size, hexdump};
+
+/// Everything a command can fail with.
+#[derive(Debug)]
+enum CliError {
+    /// Opening or reading a source failed.
+    Disk(Error),
+    /// Anything else, already worded for people.
+    Message(String),
+}
+
+impl From<Error> for CliError {
+    fn from(error: Error) -> Self {
+        CliError::Disk(error)
+    }
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CliError::Disk(error) => error.fmt(f),
+            CliError::Message(message) => f.write_str(message),
+        }
+    }
+}
+
+/// `0x1BE` or `446`.
+fn parse_offset(text: &str) -> Result<u64, String> {
+    datareco_templates::parse_integer(text)
+        .and_then(|n| u64::try_from(n).ok())
+        .ok_or_else(|| format!("\"{text}\" is not an offset (use decimal or 0x hex)"))
+}
 
 /// DataReco: disk editor and data recovery tool. Never writes to disks.
 #[derive(Parser)]
@@ -36,6 +70,48 @@ enum Command {
         #[arg(long, short = 'n', default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=4096))]
         count: u32,
     },
+    /// List the structure templates `decode` can use.
+    Templates {
+        /// Also load the template files in this folder.
+        #[arg(long)]
+        templates_dir: Option<PathBuf>,
+    },
+    /// Decode a structure (boot sector, partition table, MFT record, …).
+    Decode {
+        /// What to read: a disk (disk0), a volume (C:) or an image file path.
+        source: String,
+        /// Template id from `datareco templates`, or "auto" to recognize it.
+        template: String,
+        /// Where the structure starts, as a sector number.
+        #[arg(long, short, conflicts_with = "offset")]
+        sector: Option<u64>,
+        /// Where the structure starts, as a byte offset (decimal or 0x hex).
+        #[arg(long, value_parser = parse_offset)]
+        offset: Option<u64>,
+        /// Also load the template files in this folder.
+        #[arg(long)]
+        templates_dir: Option<PathBuf>,
+    },
+    /// Search a disk, volume or image file for text or bytes.
+    Find {
+        /// What to search: a disk (disk0), a volume (C:) or an image file path.
+        source: String,
+        /// Text to find (ASCII).
+        #[arg(long, required_unless_present = "hex", conflicts_with = "hex")]
+        text: Option<String>,
+        /// Bytes to find, in hex, e.g. "55 AA".
+        #[arg(long)]
+        hex: Option<String>,
+        /// Treat upper and lower case ASCII letters as the same.
+        #[arg(long, short)]
+        ignore_case: bool,
+        /// Byte offset to start from (decimal or 0x hex).
+        #[arg(long, value_parser = parse_offset, default_value = "0")]
+        from: u64,
+        /// Stop after this many matches.
+        #[arg(long, short = 'n', default_value_t = 1)]
+        count: u32,
+    },
 }
 
 fn main() -> ExitCode {
@@ -46,12 +122,35 @@ fn main() -> ExitCode {
             sector,
             count,
         } => read(&source, sector, count),
+        Command::Templates { templates_dir } => structures::list(templates_dir.as_deref()),
+        Command::Decode {
+            source,
+            template,
+            sector,
+            offset,
+            templates_dir,
+        } => structures::decode(&source, &template, sector, offset, templates_dir.as_deref()),
+        Command::Find {
+            source,
+            text,
+            hex,
+            ignore_case,
+            from,
+            count,
+        } => structures::find(
+            &source,
+            text.as_deref(),
+            hex.as_deref(),
+            ignore_case,
+            from,
+            count,
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
-            if matches!(error, Error::AccessDenied { .. }) {
+            if matches!(error, CliError::Disk(Error::AccessDenied { .. })) {
                 eprintln!("hint: open a terminal with \"Run as administrator\" and try again");
             }
             ExitCode::FAILURE
@@ -59,7 +158,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn disks(json: bool) -> Result<(), Error> {
+fn disks(json: bool) -> Result<(), CliError> {
     let devices = list_devices()?;
     if json {
         println!(
@@ -129,7 +228,7 @@ fn drive_letter(volume: &VolumeInfo) -> Option<String> {
         .map(|mount| mount.trim_end_matches('\\').to_owned())
 }
 
-fn read(source: &str, sector: u64, count: u32) -> Result<(), Error> {
+fn read(source: &str, sector: u64, count: u32) -> Result<(), CliError> {
     let spec = SourceSpec::parse(source);
     let disk = Disk::open(&spec)?;
     println!(

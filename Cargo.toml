@@ -29,6 +29,8 @@ tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "2"
+toml = "0.9"
+memchr = "2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -40,6 +42,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 datareco-io = { path = "crates/io" }
+datareco-templates = { path = "crates/templates" }
 
 [workspace.lints.rust]
 # Raw disk access needs a little `unsafe` for OS calls (crates/io only).

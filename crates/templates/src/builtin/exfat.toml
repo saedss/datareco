@@ -1,0 +1,558 @@
+# exFAT. Layout: Microsoft "exFAT file system specification".
+
+[[template]]
+id = "exfat_boot_sector"
+name = "exFAT boot sector"
+group = "exFAT"
+description = "First sector of an exFAT volume. A backup of the 12-sector boot region starts at sector 12."
+size = 512
+signature = [{ offset = 3, ascii = "EXFAT   " }]
+
+[[template.field]]
+name = "Jump instruction"
+offset = 0
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "File system name"
+offset = 3
+type = "ascii"
+length = 8
+
+[[template.field]]
+name = "Must be zero"
+offset = 11
+type = "bytes"
+length = 53
+
+[[template.field]]
+name = "Partition offset (sectors)"
+offset = 64
+type = "u64"
+description = "Where the volume starts on the disk; 0 means 'ignore this field'."
+
+[[template.field]]
+name = "Volume length (sectors)"
+offset = 72
+type = "u64"
+
+[[template.field]]
+name = "FAT offset (sectors)"
+offset = 80
+type = "u32"
+
+[[template.field]]
+name = "FAT length (sectors)"
+offset = 84
+type = "u32"
+
+[[template.field]]
+name = "Cluster heap offset (sectors)"
+offset = 88
+type = "u32"
+
+[[template.field]]
+name = "Cluster count"
+offset = 92
+type = "u32"
+
+[[template.field]]
+name = "Root directory cluster"
+offset = 96
+type = "u32"
+
+[[template.field]]
+name = "Volume serial number"
+offset = 100
+type = "u32"
+format = "hex"
+
+[[template.field]]
+name = "File system revision"
+offset = 104
+type = "u16"
+format = "hex"
+values = { "0x0100" = "1.00" }
+
+[[template.field]]
+name = "Volume flags"
+offset = 106
+type = "u16"
+format = "hex"
+flags = { "0x1" = "second FAT active", "0x2" = "volume dirty", "0x4" = "media failure", "0x8" = "clear to zero" }
+
+[[template.field]]
+name = "Bytes per sector (power of 2)"
+offset = 108
+type = "u8"
+values = { "9" = "512 bytes", "10" = "1024 bytes", "11" = "2048 bytes", "12" = "4096 bytes" }
+
+[[template.field]]
+name = "Sectors per cluster (power of 2)"
+offset = 109
+type = "u8"
+[template.field.values]
+"0" = "1 sector"
+"1" = "2 sectors"
+"2" = "4 sectors"
+"3" = "8 sectors"
+"4" = "16 sectors"
+"5" = "32 sectors"
+"6" = "64 sectors"
+"7" = "128 sectors"
+"8" = "256 sectors"
+"9" = "512 sectors"
+"10" = "1024 sectors"
+
+[[template.field]]
+name = "Number of FATs"
+offset = 110
+type = "u8"
+
+[[template.field]]
+name = "Drive select"
+offset = 111
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Percent in use"
+offset = 112
+type = "u8"
+values = { "255" = "unknown" }
+
+[[template.field]]
+name = "Reserved"
+offset = 113
+type = "bytes"
+length = 7
+
+[[template.field]]
+name = "Boot code"
+offset = 120
+type = "bytes"
+length = 390
+
+[[template.field]]
+name = "Boot signature"
+offset = 510
+type = "u16"
+format = "hex"
+values = { "0xAA55" = "valid (55 AA)" }
+
+
+[[template]]
+id = "exfat_dir_entries"
+name = "exFAT directory entries"
+group = "exFAT"
+description = "A directory's 32-byte entries. Each file is a set: a file entry, a stream entry, then name entries. Deleted entries have the top bit of the type cleared (85 becomes 05)."
+extent = 512
+
+[[template.field]]
+name = "Entries"
+offset = 0
+type = "struct"
+template = "exfat_dir_entry"
+count = "fill"
+
+
+[[template]]
+id = "exfat_dir_entry"
+name = "exFAT directory entry"
+group = "exFAT"
+description = "One 32-byte directory entry; its first byte says which kind."
+size = 32
+
+[[template.field]]
+name = "Entry type"
+id = "type"
+offset = 0
+type = "u8"
+hidden = true
+
+[[template.field]]
+name = "Entry"
+offset = 0
+type = "struct"
+inline = true
+[template.field.select]
+value = "type"
+default = "exfat_other_entry"
+[template.field.select.cases]
+"0x81" = "exfat_bitmap_entry"
+"0x82" = "exfat_upcase_entry"
+"0x83" = "exfat_label_entry"
+"0x03" = "exfat_label_entry"
+"0x85" = "exfat_file_entry"
+"0x05" = "exfat_file_entry"
+"0xA0" = "exfat_guid_entry"
+"0xC0" = "exfat_stream_entry"
+"0x40" = "exfat_stream_entry"
+"0xC1" = "exfat_name_entry"
+"0x41" = "exfat_name_entry"
+
+
+[[template]]
+id = "exfat_file_entry"
+name = "exFAT file entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "File ({secondary_count} more entries)"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0x85" = "file", "0x05" = "file (deleted)" }
+
+[[template.field]]
+name = "Secondary count"
+offset = 1
+type = "u8"
+description = "How many entries follow in this file's set (stream + names)."
+
+[[template.field]]
+name = "Set checksum"
+offset = 2
+type = "u16"
+format = "hex"
+
+[[template.field]]
+name = "Attributes"
+offset = 4
+type = "u16"
+format = "hex"
+flags = { "0x01" = "read-only", "0x02" = "hidden", "0x04" = "system", "0x10" = "directory", "0x20" = "archive" }
+
+[[template.field]]
+name = "Reserved"
+offset = 6
+type = "u16"
+
+[[template.field]]
+name = "Created"
+offset = 8
+type = "fat_datetime"
+
+[[template.field]]
+name = "Modified"
+offset = 12
+type = "fat_datetime"
+
+[[template.field]]
+name = "Accessed"
+offset = 16
+type = "fat_datetime"
+
+[[template.field]]
+name = "Created (10 ms units)"
+offset = 20
+type = "u8"
+
+[[template.field]]
+name = "Modified (10 ms units)"
+offset = 21
+type = "u8"
+
+[[template.field]]
+name = "Created UTC offset"
+offset = 22
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Modified UTC offset"
+offset = 23
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Accessed UTC offset"
+offset = 24
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Reserved (2)"
+offset = 25
+type = "bytes"
+length = 7
+
+
+[[template]]
+id = "exfat_stream_entry"
+name = "exFAT stream extension entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "Stream: {data_length} bytes from cluster {first_cluster}"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0xC0" = "stream extension", "0x40" = "stream extension (deleted)" }
+
+[[template.field]]
+name = "Flags"
+offset = 1
+type = "u8"
+format = "hex"
+flags = { "0x1" = "allocation possible", "0x2" = "contiguous (no FAT chain)" }
+
+[[template.field]]
+name = "Reserved"
+offset = 2
+type = "u8"
+
+[[template.field]]
+name = "Name length (characters)"
+offset = 3
+type = "u8"
+
+[[template.field]]
+name = "Name hash"
+offset = 4
+type = "u16"
+format = "hex"
+
+[[template.field]]
+name = "Reserved (2)"
+offset = 6
+type = "u16"
+
+[[template.field]]
+name = "Valid data length"
+offset = 8
+type = "u64"
+
+[[template.field]]
+name = "Reserved (3)"
+offset = 16
+type = "u32"
+
+[[template.field]]
+name = "First cluster"
+offset = 20
+type = "u32"
+
+[[template.field]]
+name = "Data length"
+offset = 24
+type = "u64"
+
+
+[[template]]
+id = "exfat_name_entry"
+name = "exFAT file name entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "Name: {name}"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0xC1" = "file name", "0x41" = "file name (deleted)" }
+
+[[template.field]]
+name = "Flags"
+offset = 1
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Name characters"
+id = "name"
+offset = 2
+type = "utf16"
+length = 30
+description = "Up to 15 characters; longer names continue in the next name entry."
+
+
+[[template]]
+id = "exfat_bitmap_entry"
+name = "exFAT allocation bitmap entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "Allocation bitmap"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0x81" = "allocation bitmap" }
+
+[[template.field]]
+name = "Flags"
+offset = 1
+type = "u8"
+format = "hex"
+values = { "0x00" = "first bitmap", "0x01" = "second bitmap" }
+
+[[template.field]]
+name = "Reserved"
+offset = 2
+type = "bytes"
+length = 18
+
+[[template.field]]
+name = "First cluster"
+offset = 20
+type = "u32"
+
+[[template.field]]
+name = "Data length"
+offset = 24
+type = "u64"
+
+
+[[template]]
+id = "exfat_upcase_entry"
+name = "exFAT up-case table entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "Up-case table"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0x82" = "up-case table" }
+
+[[template.field]]
+name = "Reserved"
+offset = 1
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "Table checksum"
+offset = 4
+type = "u32"
+format = "hex"
+
+[[template.field]]
+name = "Reserved (2)"
+offset = 8
+type = "bytes"
+length = 12
+
+[[template.field]]
+name = "First cluster"
+offset = 20
+type = "u32"
+
+[[template.field]]
+name = "Data length"
+offset = 24
+type = "u64"
+
+
+[[template]]
+id = "exfat_label_entry"
+name = "exFAT volume label entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "Label: {volume_label}"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0x83" = "volume label", "0x03" = "no volume label" }
+
+[[template.field]]
+name = "Character count"
+offset = 1
+type = "u8"
+
+[[template.field]]
+name = "Volume label"
+offset = 2
+type = "utf16"
+length = 22
+
+[[template.field]]
+name = "Reserved"
+offset = 24
+type = "bytes"
+length = 8
+
+
+[[template]]
+id = "exfat_guid_entry"
+name = "exFAT volume GUID entry"
+group = "exFAT"
+size = 32
+list = false
+summary = "Volume GUID"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0xA0" = "volume GUID" }
+
+[[template.field]]
+name = "Secondary count"
+offset = 1
+type = "u8"
+
+[[template.field]]
+name = "Set checksum"
+offset = 2
+type = "u16"
+format = "hex"
+
+[[template.field]]
+name = "Flags"
+offset = 4
+type = "u16"
+format = "hex"
+
+[[template.field]]
+name = "Volume GUID"
+offset = 6
+type = "guid"
+
+[[template.field]]
+name = "Reserved"
+offset = 22
+type = "bytes"
+length = 10
+
+
+[[template]]
+id = "exfat_other_entry"
+name = "exFAT directory entry (other)"
+group = "exFAT"
+size = 32
+list = false
+summary = "{entry_type}"
+
+[[template.field]]
+name = "Entry type"
+offset = 0
+type = "u8"
+format = "hex"
+values = { "0x00" = "end of directory (unused from here on)" }
+
+[[template.field]]
+name = "Data"
+offset = 1
+type = "bytes"
+length = 31

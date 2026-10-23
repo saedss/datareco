@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, AppInfo, DeviceList, toCommandError } from "./api";
+import { api, AppInfo, DeviceList, TemplateList, toCommandError } from "./api";
 import { DeviceSidebar, Selection, findSelection, imageSelection } from "./components/DeviceSidebar";
-import { SectorView } from "./components/SectorView";
+import { DiskEditor } from "./components/DiskEditor";
 import "./App.css";
 
 const IMAGE_FILTERS = [
@@ -18,6 +18,15 @@ function App() {
   const [images, setImages] = useState<string[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [restartError, setRestartError] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<TemplateList | null>(null);
+
+  useEffect(() => {
+    api.listTemplates().then(setTemplates).catch(() => setTemplates(null));
+  }, []);
+
+  const reloadTemplates = useCallback(() => {
+    api.reloadTemplates().then(setTemplates).catch(() => {});
+  }, []);
 
   const refreshDevices = useCallback(() => {
     setDevicesError(null);
@@ -80,17 +89,19 @@ function App() {
 
       <main className="workspace">
         {selection ? (
-          <SectorView
+          <DiskEditor
             key={selection.id}
             sourceId={selection.id}
             title={selection.title}
             subtitle={selection.subtitle}
+            templates={templates}
+            onReloadTemplates={reloadTemplates}
             onRestartAsAdmin={restartAsAdmin}
           />
         ) : (
           <div className="welcome">
             <h1>DataReco</h1>
-            <p>Pick a disk, volume or image file to look at its sectors.</p>
+            <p>Pick a disk, volume or image file to look inside it.</p>
             <span className="badge" title="Nothing is ever written to your disks in this mode">
               Read-only mode
             </span>
