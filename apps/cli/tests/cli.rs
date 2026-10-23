@@ -247,3 +247,144 @@ fn disks_lists_devices_as_json() {
     assert!(devices["disks"].is_array());
     assert!(devices["volumes"].is_array());
 }
+
+fn temp_image(name: &str, bytes: &[u8]) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("datareco-cli-{}-{name}", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+/// A FAT32 volume (no partition table) with a folder and a deleted file.
+fn fat_volume(name: &str) -> PathBuf {
+    use datareco_fs::FsKind;
+    use datareco_fs::testutil::{FatBuilder, text};
+    let mut b = FatBuilder::new(FsKind::Fat32, 70_000);
+    b.label(b"CLI TEST   ");
+    let root = b.root();
+    b.file(root, "readme.txt", b"hello from a FAT volume\n");
+    let (docs, _) = b.mkdir(root, "docs");
+    b.file(docs, "notes.txt", &text("notes", 3000));
+    let old = b.file(root, "old.txt", b"deleted, not gone\n");
+    b.delete(&old);
+    temp_image(name, &b.build())
+}
+
+/// An MBR disk with an NTFS volume at sector 2048; one file has a stream.
+fn ntfs_partition(name: &str) -> PathBuf {
+    use datareco_fs::testutil::{NTFS_ROOT, NtfsBuilder, noise};
+    let mut b = NtfsBuilder::new(2048);
+    b.label("CLI NTFS");
+    let photo = b.file(NTFS_ROOT, "photo.jpg", &noise(1, 9000));
+    b.stream(photo, "Zone.Identifier", b"[ZoneTransfer]\r\nZoneId=3\r\n");
+    let volume = b.build();
+    let mut disk = vec![0u8; 2048 * 512];
+    disk[446 + 4] = 0x07;
+    disk[446 + 8..446 + 12].copy_from_slice(&2048u32.to_le_bytes());
+    let sectors = u32::try_from(volume.len() / 512).unwrap();
+    disk[446 + 12..446 + 16].copy_from_slice(&sectors.to_le_bytes());
+    disk[510..512].copy_from_slice(&[0x55, 0xAA]);
+    disk.extend_from_slice(&volume);
+    temp_image(name, &disk)
+}
+
+#[test]
+fn ls_lists_files_and_deleted_ones() {
+    let image = fat_volume("ls.img");
+    let out = datareco(&["ls", image.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("FAT32 \"CLI TEST\""), "{text}");
+    assert!(
+        text.contains("2024-01-15 10:30    24 bytes           readme.txt"),
+        "{text}"
+    );
+    assert!(text.contains("cluster size 512 bytes"), "{text}");
+    assert!(text.contains("docs/"), "{text}");
+    assert!(text.contains("deleted  old.txt"), "{text}");
+    assert!(
+        text.contains("2 file(s), 1 folder(s); 1 deleted."),
+        "{text}"
+    );
+
+    let out = datareco(&["ls", image.to_str().unwrap(), "--recursive", "--deleted"]);
+    let text = stdout(&out);
+    assert!(
+        text.contains("old.txt") && !text.contains("readme.txt"),
+        "{text}"
+    );
+
+    let out = datareco(&["ls", image.to_str().unwrap(), "-r"]);
+    assert!(stdout(&out).contains("docs/notes.txt"), "{}", stdout(&out));
+
+    let out = datareco(&["ls", image.to_str().unwrap(), "readme.txt"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("is a file"), "{}", stderr(&out));
+    std::fs::remove_file(image).unwrap();
+}
+
+#[test]
+fn cat_prints_live_and_deleted_files() {
+    let image = fat_volume("cat.img");
+    let out = datareco(&["cat", image.to_str().unwrap(), "readme.txt"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"hello from a FAT volume\n");
+
+    let out = datareco(&["cat", image.to_str().unwrap(), r"DOCS\Notes.txt"]);
+    assert_eq!(out.stdout, datareco_fs::testutil::text("notes", 3000));
+
+    let out = datareco(&["cat", image.to_str().unwrap(), "old.txt"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"deleted, not gone\n");
+    assert!(
+        stderr(&out).starts_with("note: Deleted."),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = datareco(&["cat", image.to_str().unwrap(), "missing.txt"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("missing.txt was not found"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_file(image).unwrap();
+}
+
+#[test]
+fn ls_and_cat_find_the_volume_in_a_partition() {
+    let image = ntfs_partition("ntfs-files.img");
+    let path = image.to_str().unwrap();
+    let out = datareco(&["ls", path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("NTFS \"CLI NTFS\""), "{text}");
+    assert!(
+        text.contains("photo.jpg  [streams: Zone.Identifier]"),
+        "{text}"
+    );
+
+    let out = datareco(&[
+        "cat",
+        path,
+        "photo.jpg",
+        "--partition",
+        "1",
+        "--stream",
+        "Zone.Identifier",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"[ZoneTransfer]\r\nZoneId=3\r\n");
+
+    let out = datareco(&["cat", path, "photo.jpg", "--offset", "0x100000"]);
+    assert_eq!(out.stdout, datareco_fs::testutil::noise(1, 9000));
+
+    let out = datareco(&["ls", path, "--partition", "2"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("There's no partition 2"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_file(image).unwrap();
+}

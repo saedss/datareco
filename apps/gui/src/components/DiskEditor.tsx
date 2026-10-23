@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ByteData, CommandError, SourceInfo, TemplateList, api, toCommandError } from "../api";
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
+import { FileBrowser } from "./FileBrowser";
 import { BYTES_PER_ROW, HexGrid, Range } from "./HexGrid";
 import { PartitionsPanel } from "./PartitionsPanel";
 import { StructurePanel } from "./StructurePanel";
@@ -15,7 +16,10 @@ type Props = {
   onRestartAsAdmin: () => void;
 };
 
-/** The disk editor (view only): hex grid, navigation, search and structures. */
+type View = "sectors" | "files";
+
+/** The disk editor (view only): sectors as hex with navigation, search and
+ *  structures, or the files on its volumes. */
 export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTemplates, onRestartAsAdmin }: Props) {
   const [info, setInfo] = useState<SourceInfo | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
@@ -26,7 +30,15 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
   const [data, setData] = useState<ByteData | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [tab, setTab] = useState<"structure" | "partitions" | "bookmarks">("structure");
+  const [view, setView] = useState<View>("sectors");
+  // The file browser starts only when first shown (NTFS reads its whole MFT).
+  const [filesOpened, setFilesOpened] = useState(false);
   const latestRead = useRef(0);
+
+  const showView = useCallback((next: View) => {
+    setView(next);
+    if (next === "files") setFilesOpened(true);
+  }, []);
 
   useEffect(() => {
     api
@@ -80,7 +92,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
   if (error?.kind === "access_denied") {
     return (
       <section className="editor">
-        <EditorHeader title={title} subtitle={subtitle} info={info} />
+        <EditorHeader title={title} subtitle={subtitle} info={info} view={null} onView={showView} />
         <AdminNeeded onRestart={onRestartAsAdmin} />
       </section>
     );
@@ -88,7 +100,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
 
   return (
     <section className="editor">
-      <EditorHeader title={title} subtitle={subtitle} info={info} />
+      <EditorHeader title={title} subtitle={subtitle} info={info} view={info ? view : null} onView={showView} />
       {error && (
         <div className="banner error" role="alert">
           {error.message}
@@ -96,79 +108,102 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
       )}
       {info && (
         <>
-          <div className="toolbar">
-            <GoTo info={info} onGo={(offset) => reveal(offset, null)} />
-            <Search
-              info={info}
-              cursor={cursor}
-              onFound={(offset, length) => reveal(offset, { start: offset, length })}
-              onStatus={setStatus}
-            />
+          <div className="view-pane" hidden={view !== "sectors"}>
+            <div className="toolbar">
+              <GoTo info={info} onGo={(offset) => reveal(offset, null)} />
+              <Search
+                info={info}
+                cursor={cursor}
+                onFound={(offset, length) => reveal(offset, { start: offset, length })}
+                onStatus={setStatus}
+              />
+            </div>
+            <div className="editor-body">
+              <HexGrid
+                size={info.size}
+                sectorSize={info.sectorSize}
+                topRow={topRow}
+                data={data}
+                cursor={cursor}
+                selection={selection}
+                onCursor={(offset) => {
+                  setSelection(null);
+                  moveCursor(offset);
+                }}
+                onScroll={setTopRow}
+                onRowsChange={setRows}
+              />
+              <aside className="side-panel">
+                <div className="tabs" role="tablist">
+                  <button role="tab" aria-selected={tab === "structure"} onClick={() => setTab("structure")}>
+                    Structure
+                  </button>
+                  <button role="tab" aria-selected={tab === "partitions"} onClick={() => setTab("partitions")}>
+                    Partitions
+                  </button>
+                  <button role="tab" aria-selected={tab === "bookmarks"} onClick={() => setTab("bookmarks")}>
+                    Bookmarks
+                  </button>
+                </div>
+                {/* All panels stay mounted, so a running search or a decoded
+                    structure survives switching tabs. */}
+                <div className="panel-body" hidden={tab !== "structure"}>
+                  <StructurePanel
+                    sourceId={info.id}
+                    sectorSize={info.sectorSize}
+                    cursor={cursor}
+                    templates={templates}
+                    onReloadTemplates={onReloadTemplates}
+                    onSelectRange={(range) => reveal(range.start, range)}
+                  />
+                </div>
+                <div className="panel-body" hidden={tab !== "partitions"}>
+                  <PartitionsPanel
+                    sourceId={info.id}
+                    sectorSize={info.sectorSize}
+                    onJump={(offset) => reveal(offset, { start: offset, length: info.sectorSize })}
+                  />
+                </div>
+                <div className="panel-body" hidden={tab !== "bookmarks"}>
+                  <BookmarksPanel
+                    sourceId={info.id}
+                    sectorSize={info.sectorSize}
+                    cursor={cursor}
+                    onJump={(offset) => reveal(offset, null)}
+                  />
+                </div>
+              </aside>
+            </div>
+            <CursorInfo info={info} cursor={cursor} data={data} selection={selection} status={status} />
           </div>
-          <div className="editor-body">
-            <HexGrid
-              size={info.size}
-              sectorSize={info.sectorSize}
-              topRow={topRow}
-              data={data}
-              cursor={cursor}
-              selection={selection}
-              onCursor={(offset) => {
-                setSelection(null);
-                moveCursor(offset);
-              }}
-              onScroll={setTopRow}
-              onRowsChange={setRows}
-            />
-            <aside className="side-panel">
-              <div className="tabs" role="tablist">
-                <button role="tab" aria-selected={tab === "structure"} onClick={() => setTab("structure")}>
-                  Structure
-                </button>
-                <button role="tab" aria-selected={tab === "partitions"} onClick={() => setTab("partitions")}>
-                  Partitions
-                </button>
-                <button role="tab" aria-selected={tab === "bookmarks"} onClick={() => setTab("bookmarks")}>
-                  Bookmarks
-                </button>
-              </div>
-              {/* All panels stay mounted, so a running search or a decoded
-                  structure survives switching tabs. */}
-              <div className="panel-body" hidden={tab !== "structure"}>
-                <StructurePanel
-                  sourceId={info.id}
-                  sectorSize={info.sectorSize}
-                  cursor={cursor}
-                  templates={templates}
-                  onReloadTemplates={onReloadTemplates}
-                  onSelectRange={(range) => reveal(range.start, range)}
-                />
-              </div>
-              <div className="panel-body" hidden={tab !== "partitions"}>
-                <PartitionsPanel
-                  sourceId={info.id}
-                  sectorSize={info.sectorSize}
-                  onJump={(offset) => reveal(offset, { start: offset, length: info.sectorSize })}
-                />
-              </div>
-              <div className="panel-body" hidden={tab !== "bookmarks"}>
-                <BookmarksPanel
-                  sourceId={info.id}
-                  sectorSize={info.sectorSize}
-                  cursor={cursor}
-                  onJump={(offset) => reveal(offset, null)}
-                />
-              </div>
-            </aside>
-          </div>
-          <CursorInfo info={info} cursor={cursor} data={data} selection={selection} status={status} />
+          {filesOpened && (
+            <div className="view-pane" hidden={view !== "files"}>
+              <FileBrowser
+                sourceId={info.id}
+                sectorSize={info.sectorSize}
+                onShowInSectors={(offset, length) => {
+                  setView("sectors");
+                  reveal(offset, { start: offset, length: Math.max(1, Math.min(length, info.size - offset)) });
+                }}
+              />
+            </div>
+          )}
         </>
       )}
     </section>
   );
 }
 
-function EditorHeader({ title, subtitle, info }: { title: string; subtitle: string; info: SourceInfo | null }) {
+type HeaderProps = {
+  title: string;
+  subtitle: string;
+  info: SourceInfo | null;
+  /** The view shown, or null to hide the switch. */
+  view: View | null;
+  onView: (view: View) => void;
+};
+
+function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
   return (
     <header className="view-header">
       <div>
@@ -180,6 +215,16 @@ function EditorHeader({ title, subtitle, info }: { title: string; subtitle: stri
         )}
       </div>
       <div className="view-header-right">
+        {view && (
+          <div className="view-switch" role="tablist" aria-label="View">
+            <button role="tab" aria-selected={view === "sectors"} onClick={() => onView("sectors")}>
+              Sectors
+            </button>
+            <button role="tab" aria-selected={view === "files"} onClick={() => onView("files")}>
+              Files
+            </button>
+          </div>
+        )}
         {info && (
           <p className="muted view-size">
             {formatSize(info.size)} · {formatNumber(info.sectorCount)} sectors of {info.sectorSize} bytes

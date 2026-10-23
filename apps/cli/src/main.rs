@@ -1,5 +1,6 @@
 //! `datareco` command-line tool. Uses the same engine crates as the desktop app.
 
+mod files;
 mod format;
 mod partitions;
 mod structures;
@@ -11,6 +12,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use datareco_io::{DeviceList, Disk, Error, SourceSpec, VolumeInfo, is_elevated, list_devices};
 
+use crate::files::VolumeChoice;
 use crate::format::{format_size, hexdump};
 
 /// Everything a command can fail with.
@@ -106,6 +108,47 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
+    /// List a folder of a FAT, exFAT or NTFS volume, deleted files included.
+    Ls {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+        /// The folder, e.g. "docs/photos" (default: the top folder).
+        #[arg(default_value = "")]
+        path: String,
+        /// Which partition, by its number in `datareco partitions`.
+        #[arg(long, short, conflicts_with = "offset")]
+        partition: Option<u32>,
+        /// Where the volume starts, as a byte offset (decimal or 0x hex).
+        #[arg(long, value_parser = parse_offset)]
+        offset: Option<u64>,
+        /// Show only deleted files and folders.
+        #[arg(long)]
+        deleted: bool,
+        /// Also list what's in the folders inside, and so on.
+        #[arg(long, short)]
+        recursive: bool,
+    },
+    /// Print a file from a FAT, exFAT or NTFS volume. Redirect it to a file on
+    /// another disk to save it (in Windows PowerShell 5, `>` mangles binary
+    /// data: use cmd or PowerShell 7).
+    Cat {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+        /// The file, e.g. "docs/notes.txt".
+        path: String,
+        /// Which partition, by its number in `datareco partitions`.
+        #[arg(long, short, conflicts_with = "offset")]
+        partition: Option<u32>,
+        /// Where the volume starts, as a byte offset (decimal or 0x hex).
+        #[arg(long, value_parser = parse_offset)]
+        offset: Option<u64>,
+        /// An NTFS alternate data stream of the file instead of its contents.
+        #[arg(long)]
+        stream: Option<String>,
+        /// When a deleted file and a live one have the same name, take the deleted one.
+        #[arg(long)]
+        deleted: bool,
+    },
     /// Search a disk, volume or image file for text or bytes.
     Find {
         /// What to search: a disk (disk0), a volume (C:) or an image file path.
@@ -146,6 +189,34 @@ fn main() -> ExitCode {
         } => structures::decode(&source, &template, sector, offset, templates_dir.as_deref()),
         Command::Partitions { source } => partitions::show(&source),
         Command::FindPartitions { source, full } => partitions::find(&source, full),
+        Command::Ls {
+            source,
+            path,
+            partition,
+            offset,
+            deleted,
+            recursive,
+        } => files::ls(
+            &source,
+            &path,
+            &VolumeChoice { partition, offset },
+            deleted,
+            recursive,
+        ),
+        Command::Cat {
+            source,
+            path,
+            partition,
+            offset,
+            stream,
+            deleted,
+        } => files::cat(
+            &source,
+            &path,
+            &VolumeChoice { partition, offset },
+            stream.as_deref(),
+            deleted,
+        ),
         Command::Find {
             source,
             text,

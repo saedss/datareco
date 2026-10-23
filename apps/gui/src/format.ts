@@ -58,3 +58,16 @@ export function utf16Bytes(text: string): number[] {
   }
   return bytes;
 }
+
+/**
+ * Seconds since 1970 as "2024-01-15 10:30", in local time, or as stored with
+ * `asStored` (FAT keeps local time without a time zone; it arrives as UTC).
+ */
+export function formatTime(seconds: number, asStored = false): string {
+  const d = new Date(seconds * 1000);
+  const [year, month, day, hours, minutes] = asStored
+    ? [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes()]
+    : [d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes()];
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${year}-${two(month)}-${two(day)} ${two(hours)}:${two(minutes)}`;
+}
