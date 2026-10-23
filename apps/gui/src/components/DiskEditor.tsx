@@ -3,6 +3,7 @@ import { ByteData, CommandError, SourceInfo, TemplateList, api, toCommandError }
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
 import { BYTES_PER_ROW, HexGrid, Range } from "./HexGrid";
+import { PartitionsPanel } from "./PartitionsPanel";
 import { StructurePanel } from "./StructurePanel";
 
 type Props = {
@@ -24,7 +25,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
   const [selection, setSelection] = useState<Range | null>(null);
   const [data, setData] = useState<ByteData | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [tab, setTab] = useState<"structure" | "bookmarks">("structure");
+  const [tab, setTab] = useState<"structure" | "partitions" | "bookmarks">("structure");
   const latestRead = useRef(0);
 
   useEffect(() => {
@@ -124,28 +125,39 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
                 <button role="tab" aria-selected={tab === "structure"} onClick={() => setTab("structure")}>
                   Structure
                 </button>
+                <button role="tab" aria-selected={tab === "partitions"} onClick={() => setTab("partitions")}>
+                  Partitions
+                </button>
                 <button role="tab" aria-selected={tab === "bookmarks"} onClick={() => setTab("bookmarks")}>
                   Bookmarks
                 </button>
               </div>
-              <div className="panel-body">
-                {tab === "structure" ? (
-                  <StructurePanel
-                    sourceId={info.id}
-                    sectorSize={info.sectorSize}
-                    cursor={cursor}
-                    templates={templates}
-                    onReloadTemplates={onReloadTemplates}
-                    onSelectRange={(range) => reveal(range.start, range)}
-                  />
-                ) : (
-                  <BookmarksPanel
-                    sourceId={info.id}
-                    sectorSize={info.sectorSize}
-                    cursor={cursor}
-                    onJump={(offset) => reveal(offset, null)}
-                  />
-                )}
+              {/* All panels stay mounted, so a running search or a decoded
+                  structure survives switching tabs. */}
+              <div className="panel-body" hidden={tab !== "structure"}>
+                <StructurePanel
+                  sourceId={info.id}
+                  sectorSize={info.sectorSize}
+                  cursor={cursor}
+                  templates={templates}
+                  onReloadTemplates={onReloadTemplates}
+                  onSelectRange={(range) => reveal(range.start, range)}
+                />
+              </div>
+              <div className="panel-body" hidden={tab !== "partitions"}>
+                <PartitionsPanel
+                  sourceId={info.id}
+                  sectorSize={info.sectorSize}
+                  onJump={(offset) => reveal(offset, { start: offset, length: info.sectorSize })}
+                />
+              </div>
+              <div className="panel-body" hidden={tab !== "bookmarks"}>
+                <BookmarksPanel
+                  sourceId={info.id}
+                  sectorSize={info.sectorSize}
+                  cursor={cursor}
+                  onJump={(offset) => reveal(offset, null)}
+                />
               </div>
             </aside>
           </div>

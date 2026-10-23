@@ -3,10 +3,10 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 2).** DataReco lists your disks and volumes and
-> has a read-only disk editor: browse any disk, volume or image as hex, search it,
-> bookmark places, and decode structures such as partition tables, boot sectors and
-> MFT records. Partition recovery comes next; see the [roadmap](docs/ROADMAP.md).
+> **Status: early development (Phase 3).** DataReco lists your disks and volumes,
+> has a read-only disk editor (hex view, search, bookmarks, structure templates),
+> reads and checks MBR and GPT partition tables, and finds lost partitions. Reading
+> files from NTFS, FAT and exFAT comes next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -23,6 +23,10 @@ when they run as administrator; image files work without. The desktop app offers
 - **Structure** suggests what starts at the cursor's sector (MBR, GPT, boot
   sectors, MFT records, …) and decodes it field by field; click a field to see
   its bytes. You can [write your own templates](docs/TEMPLATES.md).
+- **Partitions** shows the partition table (MBR with logical partitions, or GPT)
+  with each partition's file system, and flags problems such as overlaps or a
+  damaged GPT header. **Quick search** and **Full search** find lost partitions
+  from the boot sectors, superblocks and backups left on the disk.
 - **Bookmarks** remember places, separately for each disk and image.
 
 `datareco-gui --open disk0` starts on a given source.
@@ -36,6 +40,8 @@ datareco read backup.img -s 2048 -n 2  # two sectors of an image file
 datareco decode disk0 auto             # recognize and decode sector 0
 datareco decode C: ntfs_mft_record --offset 0xC0000000
 datareco templates                     # the structures decode understands
+datareco partitions disk1              # the partition table, file systems, problems
+datareco find-partitions disk1 --full  # search every sector for lost partitions
 datareco find backup.img --text "IMPORTANT" --ignore-case
 datareco find disk1 --hex "55 AA" -n 10
 ```

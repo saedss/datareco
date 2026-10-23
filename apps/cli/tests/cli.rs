@@ -164,6 +164,81 @@ fn find_locates_text_and_bytes() {
     std::fs::remove_file(image).unwrap();
 }
 
+/// An 8 MiB disk with one 4 MiB NTFS partition at sector 2048 (boot sector,
+/// an MFT record where the boot sector says, and the backup boot sector).
+/// With `wiped`, sector 0 (the partition table) is zeros.
+fn ntfs_disk(name: &str, wiped: bool) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("datareco-cli-{}-{name}", std::process::id()));
+    let mut disk = vec![0u8; 16_384 * 512];
+    let mut boot = vec![0u8; 512];
+    boot[0..3].copy_from_slice(&[0xEB, 0x52, 0x90]);
+    boot[3..11].copy_from_slice(b"NTFS    ");
+    boot[11..13].copy_from_slice(&512u16.to_le_bytes());
+    boot[13] = 8;
+    boot[40..48].copy_from_slice(&8191u64.to_le_bytes());
+    boot[48..56].copy_from_slice(&4u64.to_le_bytes());
+    boot[56..64].copy_from_slice(&8u64.to_le_bytes());
+    boot[510..512].copy_from_slice(&[0x55, 0xAA]);
+    for sector in [2048, 2048 + 8191] {
+        disk[sector * 512..sector * 512 + 512].copy_from_slice(&boot);
+    }
+    disk[(2048 + 32) * 512..(2048 + 32) * 512 + 4].copy_from_slice(b"FILE");
+    if !wiped {
+        disk[446 + 4] = 0x07;
+        disk[446 + 8..446 + 12].copy_from_slice(&2048u32.to_le_bytes());
+        disk[446 + 12..446 + 16].copy_from_slice(&8192u32.to_le_bytes());
+        disk[510..512].copy_from_slice(&[0x55, 0xAA]);
+    }
+    std::fs::write(&path, disk).unwrap();
+    path
+}
+
+#[test]
+fn partitions_shows_the_table() {
+    let image = ntfs_disk("table.img", false);
+    let out = datareco(&["partitions", image.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("Partition table: MBR"), "{text}");
+    assert!(text.contains("primary"), "{text}");
+    assert!(text.contains("NTFS, exFAT or HPFS"), "{text}");
+    assert!(text.contains("4.0 MiB"), "{text}");
+    assert!(!text.contains("Problems"), "{text}");
+    std::fs::remove_file(image).unwrap();
+}
+
+#[test]
+fn find_partitions_finds_a_lost_partition() {
+    let image = ntfs_disk("wiped.img", true);
+    let out = datareco(&["partitions", image.to_str().unwrap()]);
+    assert!(
+        stdout(&out).contains("Sector 0 is empty"),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = datareco(&["find-partitions", image.to_str().unwrap(), "--full"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.starts_with("Found 1 partition(s) (full search)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("2048") && text.contains("8192") && text.contains("NTFS"),
+        "{text}"
+    );
+    assert!(
+        text.contains("high"),
+        "boot sector and its backup agree: {text}"
+    );
+    assert!(
+        text.contains("NTFS backup boot sector at LBA 10239"),
+        "{text}"
+    );
+    std::fs::remove_file(image).unwrap();
+}
+
 #[test]
 fn disks_lists_devices_as_json() {
     let out = datareco(&["disks", "--json"]);

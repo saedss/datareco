@@ -43,6 +43,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 datareco-io = { path = "crates/io" }
 datareco-templates = { path = "crates/templates" }
+datareco-partitions = { path = "crates/partitions" }
 
 [workspace.lints.rust]
 # Raw disk access needs a little `unsafe` for OS calls (crates/io only).
