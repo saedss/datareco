@@ -23,6 +23,7 @@ pub enum FsKind {
     Refs,
     HfsPlus,
     Apfs,
+    Btrfs,
     /// Not a file system: files found by their contents (raw recovery).
     Raw,
 }
@@ -41,6 +42,7 @@ impl FsKind {
             FsKind::Refs => "ReFS",
             FsKind::HfsPlus => "HFS+",
             FsKind::Apfs => "APFS",
+            FsKind::Btrfs => "btrfs",
             FsKind::Raw => "Raw",
         }
     }
@@ -158,6 +160,46 @@ impl Ext {
     pub fn file_system(&self) -> FileSystem {
         FileSystem::new(self.kind, self.label.clone(), Some(self.size()))
     }
+}
+
+/// Where a btrfs volume's primary superblock is, from the volume's start.
+pub(crate) const BTRFS_SUPERBLOCK: u64 = 0x1_0000;
+/// Where btrfs keeps superblock copies: the primary, then two backups.
+const BTRFS_COPIES: [u64; 3] = [BTRFS_SUPERBLOCK, 0x400_0000, 0x40_0000_0000];
+
+/// A btrfs superblock (the primary or a backup copy).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Btrfs {
+    pub fsid: [u8; 16],
+    /// Where this copy is, from the volume's start.
+    pub bytenr: u64,
+    pub total_bytes: u64,
+    pub label: Option<String>,
+}
+
+impl Btrfs {
+    pub fn file_system(&self) -> FileSystem {
+        FileSystem::new(FsKind::Btrfs, self.label.clone(), Some(self.total_bytes))
+    }
+}
+
+/// Parses a btrfs superblock: its first 512 bytes are enough, the label
+/// needs the first 1024.
+pub(crate) fn parse_btrfs(sb: &[u8]) -> Option<Btrfs> {
+    if !has(sb, 0x40, b"_BHRfS_M") {
+        return None;
+    }
+    let bytenr = u64_at(sb, 0x30)?;
+    let total_bytes = u64_at(sb, 0x70)?;
+    if !BTRFS_COPIES.contains(&bytenr) || total_bytes == 0 {
+        return None;
+    }
+    Some(Btrfs {
+        fsid: array16(sb, 0x20)?,
+        bytenr,
+        total_bytes,
+        label: bytes(sb, 0x12B, 256).and_then(text),
+    })
 }
 
 /// A boot sector of a file system that starts with one.
@@ -397,7 +439,24 @@ pub fn identify(disk: &Disk, offset: u64) -> Result<Option<FileSystem>> {
     }
     let mut data = vec![0; usize::try_from(len).unwrap_or(0)];
     disk.read_at(offset, &mut data)?;
-    Ok(identify_bytes(&data))
+    match identify_bytes(&data) {
+        Some(found) => Ok(Some(found)),
+        None => identify_far(disk, offset),
+    }
+}
+
+/// File systems whose signature is past the first [`IDENTIFY_BYTES`]:
+/// btrfs keeps its superblock 64 KiB in.
+pub(crate) fn identify_far(disk: &Disk, offset: u64) -> Result<Option<FileSystem>> {
+    let at = offset.saturating_add(BTRFS_SUPERBLOCK);
+    if at.saturating_add(1024) > disk.size() {
+        return Ok(None);
+    }
+    let mut sb = vec![0; 1024];
+    disk.read_at(at, &mut sb)?;
+    Ok(parse_btrfs(&sb)
+        .filter(|b| b.bytenr == BTRFS_SUPERBLOCK)
+        .map(|b| b.file_system()))
 }
 
 #[cfg(test)]

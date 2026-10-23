@@ -35,6 +35,7 @@ The full set is about 800 MB and lands in `testdata/out/`, which git ignores.
 | `ntfs` | NTFS volume, including an alternate data stream |
 | `ext4` | ext4 volume with 4 KiB blocks |
 | `hfsplus` | HFS+ volume (skipped where the Linux kernel has no HFS+ driver) |
+| `btrfs` | btrfs volume, 128 MiB (skipped where there's no btrfs driver or btrfs-progs) |
 | `mbr` | MBR disk: primary FAT32, then NTFS and ext4 as logical partitions |
 | `gpt` | GPT disk: exFAT and NTFS partitions |
 | `mbr-wiped` | `mbr` with sector 0 zeroed: lost partitions |
@@ -42,7 +43,7 @@ The full set is about 800 MB and lands in `testdata/out/`, which git ignores.
 | `ntfs-reformatted` | `ntfs` quick-formatted as FAT32: recovery after format |
 | `fat32-no-fat` | `fat32` with boot sector and both FATs zeroed: full scan and raw recovery |
 
-The first seven have no partition table: the volume starts at byte 0.
+The first eight have no partition table: the volume starts at byte 0.
 
 No Linux tool writes APFS, so there is no APFS image. On a Mac, a small raw one
 can be made with `hdiutil create -size 40m -fs APFS -volname dr_apfs -layout NONE

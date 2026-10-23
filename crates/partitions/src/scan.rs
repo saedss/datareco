@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use datareco_io::{Disk, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::boot::{self, Boot, Ext, FileSystem, FsKind, identify};
+use crate::boot::{self, Boot, Btrfs, Ext, FileSystem, FsKind, identify};
 use crate::bytes::{has, u8_at};
 use crate::table::{PartitionTable, human_size};
 use crate::{gpt, mbr};
@@ -90,6 +90,7 @@ pub struct ScanProgress {
 enum Clue {
     Boot { offset: u64, boot: Boot },
     Ext { offset: u64, ext: Ext },
+    Btrfs { offset: u64, btrfs: Btrfs },
     Gpt { offset: u64, header: gpt::Header },
     Table { offset: u64, table: mbr::Mbr },
 }
@@ -99,6 +100,7 @@ impl Clue {
         match self {
             Clue::Boot { offset, .. }
             | Clue::Ext { offset, .. }
+            | Clue::Btrfs { offset, .. }
             | Clue::Gpt { offset, .. }
             | Clue::Table { offset, .. } => *offset,
         }
@@ -367,6 +369,24 @@ impl Scan {
                     ));
                 }
             }
+            Clue::Btrfs { offset, btrfs } => {
+                if let Some(start) = offset.checked_sub(btrfs.bytenr)
+                    && start % ss == 0
+                {
+                    let lba = offset / ss;
+                    let what = if btrfs.bytenr == boot::BTRFS_SUPERBLOCK {
+                        format!("btrfs superblock at LBA {lba}")
+                    } else {
+                        format!("btrfs backup superblock at LBA {lba}")
+                    };
+                    out.push(Candidate::from_structure(
+                        start / ss,
+                        btrfs.total_bytes.div_ceil(ss),
+                        Hint::Btrfs(btrfs.clone()),
+                        what,
+                    ));
+                }
+            }
             Clue::Gpt { offset, header } => {
                 let lba = offset / ss;
                 let which = if header.my_lba == 1 {
@@ -506,6 +526,9 @@ fn classify(sector: &[u8], offset: u64, sector_size: u64) -> Vec<Clue> {
     if let Some(boot) = boot::parse_boot(sector) {
         return vec![Clue::Boot { offset, boot }];
     }
+    if let Some(btrfs) = boot::parse_btrfs(sector) {
+        return vec![Clue::Btrfs { offset, btrfs }];
+    }
     let mut clues = Vec::new();
     if let Some(ext) = boot::parse_ext(sector) {
         clues.push(Clue::Ext { offset, ext });
@@ -532,6 +555,7 @@ fn classify(sector: &[u8], offset: u64, sector_size: u64) -> Vec<Clue> {
 enum Hint {
     Boot(Boot),
     Ext(Ext),
+    Btrfs(Btrfs),
 }
 
 impl From<Boot> for Hint {
@@ -545,6 +569,7 @@ impl Hint {
         match self {
             Hint::Boot(boot) => boot.file_system(),
             Hint::Ext(ext) => ext.file_system(),
+            Hint::Btrfs(btrfs) => btrfs.file_system(),
         }
     }
 
@@ -552,6 +577,7 @@ impl Hint {
         match self {
             Hint::Boot(boot) => boot.file_system().kind,
             Hint::Ext(ext) => ext.kind,
+            Hint::Btrfs(_) => FsKind::Btrfs,
         }
     }
 }
@@ -683,9 +709,18 @@ fn hint_at(disk: &Disk, start: u64) -> Result<Option<Hint>> {
     let Some(data) = read_small(disk, start, 2048)? else {
         return Ok(None);
     };
-    Ok(boot::parse_boot(&data)
+    let found = boot::parse_boot(&data)
         .map(Hint::Boot)
-        .or_else(|| data.get(1024..).and_then(boot::parse_ext).map(Hint::Ext)))
+        .or_else(|| data.get(1024..).and_then(boot::parse_ext).map(Hint::Ext));
+    if found.is_some() {
+        return Ok(found);
+    }
+    Ok(
+        read_small(disk, start.saturating_add(boot::BTRFS_SUPERBLOCK), 1024)?
+            .and_then(|sb| boot::parse_btrfs(&sb))
+            .filter(|b| b.bytenr == boot::BTRFS_SUPERBLOCK)
+            .map(Hint::Btrfs),
+    )
 }
 
 /// Whether the volume's other structures are where its boot sector or
@@ -728,6 +763,24 @@ fn verify(disk: &Disk, start: u64, hint: &Hint) -> Result<bool> {
                     &[0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
                 )
             }))
+        }
+        Hint::Btrfs(btrfs) => {
+            // This copy is whole (its checksum holds) ...
+            if let Some(data) = read_small(disk, at(btrfs.bytenr), 4096)?
+                && data.get(0x20..).map(crate::crc32c) == crate::bytes::u32_at(&data, 0)
+            {
+                return Ok(true);
+            }
+            // ... or another copy is there, of the same file system.
+            for offset in [boot::BTRFS_SUPERBLOCK, 0x400_0000] {
+                if offset != btrfs.bytenr
+                    && let Some(data) = read_small(disk, at(offset), 512)?
+                    && boot::parse_btrfs(&data).is_some_and(|found| found.fsid == btrfs.fsid)
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
         Hint::Ext(ext) => {
             // The primary superblock, or the first backup, with the same UUID.

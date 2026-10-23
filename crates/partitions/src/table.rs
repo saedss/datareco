@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use datareco_io::{Disk, Result};
 use serde::Serialize;
 
-use crate::boot::{FileSystem, IDENTIFY_BYTES, identify, identify_bytes};
+use crate::boot::{FileSystem, IDENTIFY_BYTES, identify, identify_bytes, identify_far};
 use crate::bytes::has;
 use crate::{gpt, mbr};
 
@@ -99,7 +99,13 @@ pub fn read_table(disk: &Disk) -> Result<PartitionTable> {
     let sector_size = u64::from(disk.sector_size());
     let start = read(disk, 0, IDENTIFY_BYTES)?;
     // A file system at sector 0 means no partition table ("superfloppy").
-    let whole_disk = identify_bytes(&start);
+    let whole_disk = match identify_bytes(&start) {
+        Some(found) => Some(found),
+        // btrfs leaves its first 64 KiB empty, so a partition table there
+        // isn't ruled out: only count it without one.
+        None if start.get(510..512) != Some(&[0x55, 0xAA]) => identify_far(disk, 0)?,
+        None => None,
+    };
     let mbr = if whole_disk.is_some() {
         None
     } else {

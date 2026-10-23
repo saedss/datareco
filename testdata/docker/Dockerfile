@@ -4,7 +4,7 @@ FROM ubuntu:24.04
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      python3 dosfstools exfatprogs exfat-fuse ntfs-3g e2fsprogs hfsprogs fdisk util-linux mount kmod \
+      python3 dosfstools exfatprogs exfat-fuse ntfs-3g e2fsprogs hfsprogs btrfs-progs fdisk util-linux mount kmod \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work

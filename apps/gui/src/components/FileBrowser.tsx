@@ -53,7 +53,7 @@ const IMAGE_TYPES: Record<string, string> = {
   ico: "image/x-icon",
 };
 
-/** Browses the FAT, exFAT, NTFS, ext2/3/4, HFS+ and APFS volumes of a source, deleted files
+/** Browses the FAT, exFAT, NTFS, ext2/3/4, HFS+, APFS and btrfs volumes of a source, deleted files
  *  included, and saves files from them. */
 export function FileBrowser({ sourceId, sectorSize, scan, raw, request, onShowInSectors }: Props) {
   const [volumes, setVolumes] = useState<VolumeChoice[] | null>(null);
@@ -187,7 +187,7 @@ export function FileBrowser({ sourceId, sectorSize, scan, raw, request, onShowIn
         <p>
           {volumes.length === 0
             ? "No file system was found in the partition table. A scan (Scan, at the top) looks for lost and damaged volumes."
-            : `DataReco reads FAT, exFAT, NTFS, ext2/3/4, HFS+ and APFS so far; this source has ${volumes.map((v) => v.name).join(", ")}. A scan may find others.`}
+            : `DataReco reads FAT, exFAT, NTFS, ext2/3/4, HFS+, APFS and btrfs so far; this source has ${volumes.map((v) => v.name).join(", ")}. A scan may find others.`}
         </p>
       </div>
     );
@@ -365,7 +365,7 @@ export function FileBrowser({ sourceId, sectorSize, scan, raw, request, onShowIn
                 ? "Opening the volume…"
                 : volume.kind === "raw"
                   ? "Files found by their contents, in a folder per kind. Their names, folders and times are lost. Select a file to preview it; tick files or folders to recover them."
-                  : `${volume.name}${volume.label ? ` "${volume.label}"` : ""}, ${formatSize(volume.size)}, ${volume.kind.startsWith("ext") || volume.kind === "hfsplus" || volume.kind === "apfs" ? "block" : "cluster"} size ${formatSize(volume.clusterSize)}. Select a file to see its details; tick files and folders to recover them.`}
+                  : `${volume.name}${volume.label ? ` "${volume.label}"` : ""}, ${formatSize(volume.size)}, ${volume.kind.startsWith("ext") || ["hfsplus", "apfs", "btrfs"].includes(volume.kind) ? "block" : "cluster"} size ${formatSize(volume.clusterSize)}. Select a file to see its details; tick files and folders to recover them.`}
             </p>
           )}
         </aside>

@@ -908,3 +908,35 @@ fn apfs_containers_list_their_volumes_and_files() {
     assert_eq!(out.stdout, b"hello from APFS\n");
     std::fs::remove_file(image).unwrap();
 }
+
+#[test]
+fn btrfs_volumes_list_their_subvolumes_and_files() {
+    use datareco_fs::testutil::{BTRFS_ROOT_DIR, BTRFS_TOP, BtrfsBuilder, text};
+    let mut b = BtrfsBuilder::new(16);
+    b.label("cli_btrfs");
+    b.file(
+        BTRFS_TOP,
+        BTRFS_ROOT_DIR,
+        "readme.txt",
+        b"hello from btrfs\n",
+    );
+    let home = b.subvolume(BTRFS_TOP, BTRFS_ROOT_DIR, "home");
+    b.file(home, BTRFS_ROOT_DIR, "notes.txt", &text("notes", 6000));
+    // A whole-disk btrfs volume: its superblock is 64 KiB in.
+    let image = temp_image("btrfs.img", &b.build());
+
+    let out = datareco(&["ls", image.to_str().unwrap(), "-r"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listing = stdout(&out);
+    assert!(listing.starts_with("btrfs \"cli_btrfs\""), "{listing}");
+    assert!(listing.contains("block size 4.0 KiB"), "{listing}");
+    assert!(listing.contains("home/notes.txt"), "{listing}");
+
+    let out = datareco(&["cat", image.to_str().unwrap(), "readme.txt"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"hello from btrfs\n");
+
+    let out = datareco(&["partitions", image.to_str().unwrap()]);
+    assert!(stdout(&out).contains("btrfs"), "{}", stdout(&out));
+    std::fs::remove_file(image).unwrap();
+}

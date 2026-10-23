@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use datareco_fs::testutil::{
-    APFS_ROOT, ApfsBuilder, EXT_ROOT, ExtBuilder, ExtOptions, FatBuilder, HFS_ROOT, HfsBuilder,
-    HfsOptions, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, STAMP, disk, noise, text,
+    APFS_ROOT, ApfsBuilder, BTRFS_ROOT_DIR, BTRFS_TOP, BtrfsBuilder, EXT_ROOT, ExtBuilder,
+    ExtOptions, FatBuilder, HFS_ROOT, HfsBuilder, HfsOptions, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder,
+    STAMP, disk, noise, text,
 };
 use datareco_fs::{Entry, FileSystem, FsKind, read_to_end, resolve};
 
@@ -247,6 +248,35 @@ fn a_quick_scan_finds_an_apfs_container() {
     let fs = open_found(Arc::clone(&quick), volume).unwrap();
     let hello = resolve(fs.as_ref(), "Data/hello.txt", false).unwrap();
     assert_eq!(read_all(fs.as_ref(), &hello), text("hello", 500));
+}
+
+#[test]
+fn scans_find_btrfs_volumes_and_open_them_from_a_superblock_copy() {
+    let mut b = BtrfsBuilder::new(16);
+    b.label("linux");
+    b.file(BTRFS_TOP, BTRFS_ROOT_DIR, "hello.txt", &text("hello", 5000));
+    let quick = disk(mbr_disk(&[(1 << 20, 0x83, &b.build())]));
+    let found = Scan::run(&quick, ScanMode::Quick).unwrap();
+    let volume = find(&found, FsKind::Btrfs);
+    assert_eq!((volume.state, volume.in_table), (VolumeState::Intact, true));
+    assert_eq!(volume.label.as_deref(), Some("linux"));
+    let fs = open_found(Arc::clone(&quick), volume).unwrap();
+    let hello = resolve(fs.as_ref(), "hello.txt", false).unwrap();
+    assert_eq!(read_all(fs.as_ref(), &hello), text("hello", 5000));
+
+    // Its first superblock wiped: the copy 64 MiB in finds it and opens it.
+    let mut b = BtrfsBuilder::new(65);
+    b.file(BTRFS_TOP, BTRFS_ROOT_DIR, "notes.txt", &text("notes", 9000));
+    let mut volume_image = b.build();
+    volume_image[0x1_0000..0x1_1000].fill(0);
+    let full = disk(mbr_disk(&[(1 << 20, 0x83, &volume_image)]));
+    let found = Scan::run(&full, ScanMode::Full).unwrap();
+    let volume = find(&found, FsKind::Btrfs);
+    assert_eq!(volume.state, VolumeState::FromBackup);
+    assert_eq!(volume.offset, 1 << 20);
+    let fs = open_found(Arc::clone(&full), volume).unwrap();
+    let notes = resolve(fs.as_ref(), "notes.txt", false).unwrap();
+    assert_eq!(read_all(fs.as_ref(), &notes), text("notes", 9000));
 }
 
 #[test]

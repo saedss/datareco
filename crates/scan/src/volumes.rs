@@ -135,16 +135,24 @@ fn from_boot_sector(
             offset + 16384 * 2048,
             offset + 32768 * 4096,
         ],
+        // The superblock copy 64 MiB in.
+        FsKind::Btrfs => vec![offset + 0x400_0000],
         _ => Vec::new(),
     };
     for backup in backups {
         // An ext superblock sits 1024 bytes into what `identify` looks at.
         let looked_at = if ext { backup - 1024 } else { backup };
         let inside = !ext || backup + 1024 <= offset.saturating_add(size);
-        if inside
-            && backup < disk.size()
-            && identify(disk, looked_at)?.is_some_and(|fs| fs.kind == kind)
-        {
+        // A btrfs copy can't be recognized on its own here; opening it says.
+        let recognized =
+            kind == FsKind::Btrfs || identify(disk, looked_at)?.is_some_and(|fs| fs.kind == kind);
+        // How much of the copy must be on the disk.
+        let length = match kind {
+            FsKind::Btrfs => 4096,
+            _ if ext => 1024,
+            _ => 512,
+        };
+        if inside && backup + length <= disk.size() && recognized {
             attempts.push((Some(backup), VolumeState::FromBackup));
         }
     }
@@ -159,7 +167,7 @@ fn from_boot_sector(
         };
         let mut evidence = partition.evidence.clone();
         if let Some(at) = boot_sector {
-            let what = if ext {
+            let what = if ext || kind == FsKind::Btrfs {
                 "backup superblock"
             } else {
                 "backup boot sector"

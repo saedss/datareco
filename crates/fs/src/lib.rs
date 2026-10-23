@@ -1,5 +1,5 @@
 //! File-system readers: browse folders, read files, and find deleted entries.
-//! NTFS, FAT12/16/32, exFAT, ext2/3/4, HFS+ and APFS for now; ReFS and btrfs
+//! NTFS, FAT12/16/32, exFAT, ext2/3/4, HFS+, APFS and btrfs for now; ReFS
 //! later.
 //!
 //! [`open`] recognizes the file system at an offset of a [`Disk`] and returns
@@ -15,6 +15,7 @@
 //! module says what a sector shows, for such a scan.
 
 mod apfs;
+mod btrfs;
 mod bytes;
 mod clusters;
 mod error;
@@ -28,6 +29,8 @@ mod volume;
 
 #[cfg(test)]
 mod tests_apfs;
+#[cfg(test)]
+mod tests_btrfs;
 #[cfg(test)]
 mod tests_exfat;
 #[cfg(test)]
@@ -95,6 +98,8 @@ pub enum EntryId {
     /// An APFS file or folder: a volume of the container (by its place in
     /// the container's list) and an object id in it.
     Apfs { volume: u32, id: u64 },
+    /// A btrfs file or folder: a subvolume's tree, and an inode in it.
+    Btrfs { tree: u64, inode: u64 },
 }
 
 /// Windows file attribute bits, as `Entry::attributes` uses them.
@@ -203,6 +208,7 @@ pub fn can_read(kind: FsKind) -> bool {
             | FsKind::Ext4
             | FsKind::HfsPlus
             | FsKind::Apfs
+            | FsKind::Btrfs
     )
 }
 
@@ -220,6 +226,7 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
         FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4 => Ok(Box::new(ext::Ext::open(volume)?)),
         FsKind::HfsPlus => Ok(Box::new(hfsplus::HfsPlus::open(volume)?)),
         FsKind::Apfs => Ok(Box::new(apfs::Apfs::open(volume)?)),
+        FsKind::Btrfs => Ok(Box::new(btrfs::Btrfs::open(volume)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()
@@ -233,7 +240,8 @@ pub struct Rebuild {
     /// A boot sector to use instead of the one at the volume's start, by its
     /// byte offset on the disk: a backup copy (NTFS keeps one at the end,
     /// FAT32 in sector 6, exFAT in sector 12). For ext, a backup superblock;
-    /// for HFS+, the volume header copy 1024 bytes before the volume's end.
+    /// for HFS+, the volume header copy 1024 bytes before the volume's end;
+    /// for btrfs, a superblock copy (64 MiB or 256 GiB in).
     pub boot_sector: Option<u64>,
     /// NTFS: MFT records found on the disk, record number → byte offset on
     /// the disk. They stand in for records the MFT has no readable copy of.
@@ -252,9 +260,14 @@ pub fn open_rebuilt(
     rebuild: &Rebuild,
 ) -> Result<Box<dyn FileSystem>, FsError> {
     let is_ext = matches!(kind, FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4);
+    let boot_size = match kind {
+        _ if is_ext => 1024,
+        FsKind::Btrfs => 4096,
+        _ => 512,
+    };
     let boot = match rebuild.boot_sector {
         Some(at) => {
-            let mut sector = vec![0; if is_ext { 1024 } else { 512 }];
+            let mut sector = vec![0; boot_size];
             disk.read_at(at, &mut sector)?;
             Some(sector)
         }
@@ -286,6 +299,7 @@ pub fn open_rebuilt(
         }
         FsKind::HfsPlus => Ok(Box::new(hfsplus::HfsPlus::open_with(volume, boot)?)),
         FsKind::Apfs => Ok(Box::new(apfs::Apfs::open(volume)?)),
+        FsKind::Btrfs => Ok(Box::new(btrfs::Btrfs::open_with(volume, boot)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()

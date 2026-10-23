@@ -11,10 +11,12 @@ use crate::FsKind;
 use crate::fat::lfn_checksum;
 
 mod apfs;
+mod btrfs;
 mod ext;
 mod hfsplus;
 mod ntfs;
 pub use apfs::{APFS_ROOT, ApfsBuilder};
+pub use btrfs::{BTRFS_ROOT_DIR, BTRFS_TOP, BtrfsBuilder};
 pub use ext::{EXT_ROOT, ExtBuilder, ExtOptions};
 pub use hfsplus::{HFS_ROOT, HfsBuilder, HfsOptions};
 pub use ntfs::{CLUSTER as NTFS_CLUSTER, NtfsBuilder, ROOT as NTFS_ROOT};

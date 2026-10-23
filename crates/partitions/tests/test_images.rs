@@ -56,6 +56,8 @@ fn kind_of(fs: &str) -> FsKind {
         "exfat" => FsKind::Exfat,
         "ntfs" => FsKind::Ntfs,
         "ext4" => FsKind::Ext4,
+        "hfsplus" => FsKind::HfsPlus,
+        "btrfs" => FsKind::Btrfs,
         other => panic!("unexpected file system {other}"),
     }
 }
@@ -81,8 +83,13 @@ fn whole_disk_volumes_have_no_partition_table() {
     let Some((dir, images)) = images() else {
         return;
     };
-    for name in ["fat12", "fat16", "fat32", "exfat", "ntfs", "ext4"] {
-        let image = image(&images, name);
+    for name in [
+        "fat12", "fat16", "fat32", "exfat", "ntfs", "ext4", "hfsplus", "btrfs",
+    ] {
+        // HFS+ and btrfs images are skipped where Linux can't make them.
+        let Some(image) = images.iter().find(|i| i["name"] == name) else {
+            continue;
+        };
         let table = read_table(&open(&dir, image)).unwrap();
         assert_eq!(table.kind, TableKind::None, "{name}");
         let fs = table
@@ -91,7 +98,7 @@ fn whole_disk_volumes_have_no_partition_table() {
         let volume = &image["volumes"][0];
         assert_eq!(fs.kind, kind_of(volume["fs"].as_str().unwrap()), "{name}");
         assert_eq!(fs.size, Some(u64_of(&volume["size"])), "{name}");
-        if name.starts_with("fat") || name == "ext4" {
+        if name.starts_with("fat") || name == "ext4" || name == "btrfs" {
             assert_eq!(fs.label.as_deref(), volume["label"].as_str(), "{name}");
         }
     }
