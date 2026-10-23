@@ -3,6 +3,7 @@
 // Release builds run without a console window on Windows. Do not remove.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod files;
 mod partitions;
 mod structures;
 
@@ -200,6 +201,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenSources::default())
         .manage(partitions::Searches::default())
+        .manage(files::FileSystems::default())
         .setup(|app| {
             let folder = app.path().app_config_dir()?.join("templates");
             app.manage(Templates::load(folder));
@@ -221,6 +223,11 @@ fn main() {
             partitions::start_partition_search,
             partitions::continue_partition_search,
             partitions::stop_partition_search,
+            files::list_volumes,
+            files::open_file_system,
+            files::list_directory,
+            files::read_file,
+            files::file_extents,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

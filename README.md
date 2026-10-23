@@ -3,10 +3,11 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 3).** DataReco lists your disks and volumes,
+> **Status: early development (Phase 4).** DataReco lists your disks and volumes,
 > has a read-only disk editor (hex view, search, bookmarks, structure templates),
-> reads and checks MBR and GPT partition tables, and finds lost partitions. Reading
-> files from NTFS, FAT and exFAT comes next; see the [roadmap](docs/ROADMAP.md).
+> reads and checks MBR and GPT partition tables, finds lost partitions, and browses
+> NTFS, FAT and exFAT volumes, deleted files included. Scanning damaged volumes and
+> saving recovered files come next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -28,6 +29,10 @@ when they run as administrator; image files work without. The desktop app offers
   damaged GPT header. **Quick search** and **Full search** find lost partitions
   from the boot sectors, superblocks and backups left on the disk.
 - **Bookmarks** remember places, separately for each disk and image.
+- **Files** (top right) browses the NTFS, FAT and exFAT volumes on the disk:
+  folders, files and their details, a preview, and deleted files and folders
+  (struck through). NTFS files whose folder is gone are under **Lost files**.
+  **Show in sectors** jumps to where a file's data is.
 
 `datareco-gui --open disk0` starts on a given source.
 
@@ -44,6 +49,10 @@ datareco partitions disk1              # the partition table, file systems, prob
 datareco find-partitions disk1 --full  # search every sector for lost partitions
 datareco find backup.img --text "IMPORTANT" --ignore-case
 datareco find disk1 --hex "55 AA" -n 10
+datareco ls disk1 -p 2 -r              # every file on partition 2, deleted ones too
+datareco ls E: Photos --deleted        # only what was deleted from E:\Photos
+datareco cat E: "Photos/beach.jpg" > D:\beach.jpg  # print a file (cmd or PowerShell 7)
+datareco cat E: notes.txt --stream Zone.Identifier  # an NTFS alternate data stream
 ```
 
 A source is `diskN`, a drive letter like `C:`, a volume path (`\\?\Volume{…}`),

@@ -124,8 +124,61 @@ export type SearchStatus = {
   found: FoundPartition[];
 };
 
+/** File-system kinds, as `FsKind` in crates/partitions serializes them. */
+export type FsKind = "ntfs" | "fat12" | "fat16" | "fat32" | "exfat" | "ext2" | "ext3" | "ext4" | "refs" | "hfsplus" | "apfs";
+
+/** A volume the file browser can offer (see src-tauri/src/files.rs). */
+export type VolumeChoice = {
+  offset: number;
+  partition: number | null;
+  kind: FsKind;
+  name: string;
+  label: string | null;
+  size: number | null;
+  readable: boolean;
+};
+
+export type FsVolumeInfo = {
+  kind: FsKind;
+  name: string;
+  label: string | null;
+  offset: number;
+  size: number;
+  clusterSize: number;
+};
+
+/** Identifies a file or folder; handed back to the engine as is. */
+export type EntryId =
+  | { kind: "clusters"; cluster: number; length: number; chain: boolean }
+  | { kind: "fixedRoot" }
+  | { kind: "record"; number: number }
+  | { kind: "orphans" };
+
+export type OpenedVolume = { info: FsVolumeInfo; root: EntryId };
+
+export type StreamInfo = { name: string; size: number };
+
+/** A file or folder in a listing (see `Entry` in crates/fs). */
+export type FileEntry = {
+  id: EntryId;
+  name: string;
+  isDir: boolean;
+  size: number;
+  deleted: boolean;
+  /** Seconds since 1970-01-01 UTC. */
+  created: number | null;
+  modified: number | null;
+  accessed: number | null;
+  attributes: number;
+  streams: StreamInfo[];
+  note: string | null;
+};
+
+/** Where part of a file is: a byte offset on the source, or nowhere (sparse). */
+export type Extent = { offset: number; length: number; sparse: boolean };
+
 export type CommandError = {
-  kind: "access_denied" | "not_found" | "out_of_range" | "unsupported" | "io" | "template";
+  kind: "access_denied" | "not_found" | "out_of_range" | "unsupported" | "io" | "template" | "damaged";
   message: string;
 };
 
@@ -151,6 +204,16 @@ export const api = {
     invoke<SearchStatus>("start_partition_search", { id, mode }),
   continuePartitionSearch: (id: string) => invoke<SearchStatus>("continue_partition_search", { id }),
   stopPartitionSearch: (id: string) => invoke<void>("stop_partition_search", { id }),
+  listVolumes: (id: string) => invoke<VolumeChoice[]>("list_volumes", { id }),
+  openFileSystem: (id: string, offset: number) => invoke<OpenedVolume>("open_file_system", { id, offset }),
+  /** A folder's entries, deleted ones included. */
+  listDirectory: (id: string, offset: number, dir: EntryId) =>
+    invoke<FileEntry[]>("list_directory", { id, offset, dir }),
+  /** Up to `length` bytes (at most 16 MiB) of a file or NTFS stream, from `start`. */
+  readFile: (id: string, offset: number, file: EntryId, stream: string | null, start: number, length: number) =>
+    invoke<ArrayBuffer>("read_file", { id, offset, file, stream, start, length }),
+  fileExtents: (id: string, offset: number, file: EntryId, stream: string | null) =>
+    invoke<Extent[]>("file_extents", { id, offset, file, stream }),
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),
 };

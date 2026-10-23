@@ -862,3 +862,246 @@ input.invalid {
   height: 8px;
   accent-color: var(--primary);
 }
+
+/* Sectors / Files switch */
+
+.view-switch {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.view-switch button {
+  padding: 4px 14px;
+  border: none;
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.view-switch button + button {
+  border-left: 1px solid var(--border);
+}
+
+.view-switch button[aria-selected="true"] {
+  color: var(--primary-text);
+  background: var(--primary);
+  font-weight: 600;
+}
+
+.view-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.view-pane[hidden] {
+  display: none;
+}
+
+/* File browser */
+
+.file-browser {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.breadcrumbs > button {
+  padding: 1px 8px;
+}
+
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.crumb .link-button:disabled {
+  color: var(--text);
+  font-weight: 600;
+  cursor: default;
+  opacity: 1;
+}
+
+.files-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.file-list-status {
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.file-table td {
+  padding: 4px 10px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-table .number {
+  text-align: right;
+}
+
+.file-table tbody tr {
+  cursor: default;
+}
+
+.file-table tbody tr:hover {
+  background: var(--panel-hover);
+}
+
+.file-table tbody tr.selected {
+  background: var(--selected);
+}
+
+.file-table tbody tr:focus-visible {
+  outline: 2px solid var(--selected-border);
+  outline-offset: -2px;
+}
+
+.file-table tr.deleted .file-name {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--dim);
+}
+
+.file-name {
+  max-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-icon {
+  display: inline-block;
+  width: 22px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pill.deleted {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.file-details {
+  overflow-y: auto;
+}
+
+.details-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 8px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+/* Stream choices: plain until picked. */
+.stream-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.stream-chip.active {
+  border-color: var(--selected-border);
+  background: var(--selected);
+  font-weight: 600;
+}
+
+.preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+}
+
+.text-preview {
+  max-height: 320px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border-radius: 4px;
+}
+
+@media (max-width: 1280px) {
+  .files-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(200px, 1fr) minmax(220px, 45%);
+  }
+}
+
+.hex-preview {
+  white-space: pre;
+  overflow-wrap: normal;
+}
