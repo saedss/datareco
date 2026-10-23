@@ -34,6 +34,7 @@ The full set is about 800 MB and lands in `testdata/out/`, which git ignores.
 | `exfat` | exFAT volume |
 | `ntfs` | NTFS volume, including an alternate data stream |
 | `ext4` | ext4 volume with 4 KiB blocks |
+| `hfsplus` | HFS+ volume (skipped where the Linux kernel has no HFS+ driver) |
 | `mbr` | MBR disk: primary FAT32, then NTFS and ext4 as logical partitions |
 | `gpt` | GPT disk: exFAT and NTFS partitions |
 | `mbr-wiped` | `mbr` with sector 0 zeroed: lost partitions |
@@ -41,7 +42,11 @@ The full set is about 800 MB and lands in `testdata/out/`, which git ignores.
 | `ntfs-reformatted` | `ntfs` quick-formatted as FAT32: recovery after format |
 | `fat32-no-fat` | `fat32` with boot sector and both FATs zeroed: full scan and raw recovery |
 
-The first six have no partition table: the volume starts at byte 0.
+The first seven have no partition table: the volume starts at byte 0.
+
+`hfsplus` needs `hfsprogs` and a kernel with the HFS+ driver (`modprobe hfsplus`).
+Some kernels lack it, Docker Desktop's among them; the generator then skips that
+image and says why, and the tests that need it skip too.
 
 ## What's on each volume
 

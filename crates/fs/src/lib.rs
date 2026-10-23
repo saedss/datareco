@@ -1,5 +1,5 @@
 //! File-system readers: browse folders, read files, and find deleted entries.
-//! NTFS, FAT12/16/32, exFAT and ext2/3/4 for now; HFS+, APFS, ReFS and btrfs
+//! NTFS, FAT12/16/32, exFAT, ext2/3/4 and HFS+ for now; APFS, ReFS and btrfs
 //! later.
 //!
 //! [`open`] recognizes the file system at an offset of a [`Disk`] and returns
@@ -20,6 +20,7 @@ mod error;
 mod exfat;
 mod ext;
 mod fat;
+mod hfsplus;
 mod ntfs;
 mod time;
 mod volume;
@@ -30,6 +31,8 @@ mod tests_exfat;
 mod tests_ext;
 #[cfg(test)]
 mod tests_fat;
+#[cfg(test)]
+mod tests_hfsplus;
 #[cfg(test)]
 mod tests_ntfs;
 #[cfg(test)]
@@ -83,6 +86,9 @@ pub enum EntryId {
     /// An ext inode. A `deleted` entry is read from what's left of the
     /// inode, or an older copy of it in the journal.
     Inode { number: u64, deleted: bool },
+    /// An HFS+ catalog record, by its catalog node ID. A `deleted` one was
+    /// found left over in the catalog.
+    Catalog { id: u32, deleted: bool },
 }
 
 /// Windows file attribute bits, as `Entry::attributes` uses them.
@@ -189,6 +195,7 @@ pub fn can_read(kind: FsKind) -> bool {
             | FsKind::Ext2
             | FsKind::Ext3
             | FsKind::Ext4
+            | FsKind::HfsPlus
     )
 }
 
@@ -204,6 +211,7 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
         FsKind::Exfat => Ok(Box::new(exfat::Exfat::open(volume)?)),
         FsKind::Ntfs => Ok(Box::new(ntfs::Ntfs::open(volume)?)),
         FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4 => Ok(Box::new(ext::Ext::open(volume)?)),
+        FsKind::HfsPlus => Ok(Box::new(hfsplus::HfsPlus::open(volume)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()
@@ -216,7 +224,8 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
 pub struct Rebuild {
     /// A boot sector to use instead of the one at the volume's start, by its
     /// byte offset on the disk: a backup copy (NTFS keeps one at the end,
-    /// FAT32 in sector 6, exFAT in sector 12). For ext, a backup superblock.
+    /// FAT32 in sector 6, exFAT in sector 12). For ext, a backup superblock;
+    /// for HFS+, the volume header copy 1024 bytes before the volume's end.
     pub boot_sector: Option<u64>,
     /// NTFS: MFT records found on the disk, record number → byte offset on
     /// the disk. They stand in for records the MFT has no readable copy of.
@@ -267,6 +276,7 @@ pub fn open_rebuilt(
         FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4 => {
             Ok(Box::new(ext::Ext::open_with(volume, boot)?))
         }
+        FsKind::HfsPlus => Ok(Box::new(hfsplus::HfsPlus::open_with(volume, boot)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()

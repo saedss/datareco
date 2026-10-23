@@ -1,7 +1,8 @@
 //! File-system reading against the generated test disk images
 //! (testdata/README.md): every live file reads back with the right hash,
 //! NTFS streams too, and deleted files are listed. ext4 deleted files come
-//! back from older copies of their inodes in the journal.
+//! back from older copies of their inodes in the journal; HFS+ deleted
+//! files only when their catalog records were left over.
 //!
 //! The images live in `testdata/out` (or `$DATARECO_TESTDATA`). Without them
 //! these tests pass with a note, unless `DATARECO_REQUIRE_TESTDATA=1`.
@@ -45,7 +46,7 @@ fn volumes(dir: &Path, images: &[Value]) -> Vec<(String, Box<dyn FileSystem>, Va
             let kind = volume["fs"].as_str().unwrap();
             if !matches!(
                 kind,
-                "fat12" | "fat16" | "fat32" | "exfat" | "ntfs" | "ext4"
+                "fat12" | "fat16" | "fat32" | "exfat" | "ntfs" | "ext4" | "hfsplus"
             ) {
                 continue;
             }
@@ -57,7 +58,7 @@ fn volumes(dir: &Path, images: &[Value]) -> Vec<(String, Box<dyn FileSystem>, Va
     }
     assert!(
         !found.is_empty(),
-        "no FAT, exFAT, NTFS or ext4 volumes in the test images"
+        "no FAT, exFAT, NTFS, ext4 or HFS+ volumes in the test images"
     );
     found
 }
@@ -103,7 +104,7 @@ fn live_files_read_back_with_the_right_hash() {
     };
     for (name, fs, volume) in volumes(&dir, &images) {
         let kind = volume["fs"].as_str().unwrap();
-        if kind == "ntfs" || kind == "ext4" || kind.starts_with("fat") {
+        if matches!(kind, "ntfs" | "ext4" | "hfsplus") || kind.starts_with("fat") {
             assert_eq!(
                 fs.info().label.as_deref(),
                 volume["label"].as_str(),
@@ -120,6 +121,11 @@ fn live_files_read_back_with_the_right_hash() {
             volume["fs"] == "ext4",
             "{name}"
         );
+        assert_eq!(
+            fs.info().kind == FsKind::HfsPlus,
+            volume["fs"] == "hfsplus",
+            "{name}"
+        );
         for file in volume["files"]
             .as_array()
             .unwrap()
@@ -134,7 +140,7 @@ fn live_files_read_back_with_the_right_hash() {
             let data = read_to_end(fs.as_ref(), &entry.id, None, u64::MAX)
                 .unwrap_or_else(|e| panic!("{name}: reading {path}: {e}"));
             assert_eq!(sha256(&data), file["sha256"], "{name}: {path}");
-            if volume["fs"] == "ntfs" || volume["fs"] == "ext4" {
+            if matches!(volume["fs"].as_str(), Some("ntfs" | "ext4" | "hfsplus")) {
                 assert_eq!(entry.modified, file["mtime"].as_i64(), "{name}: {path}");
             }
         }
@@ -177,6 +183,9 @@ fn deleted_files_are_listed() {
     };
     for (name, fs, volume) in volumes(&dir, &images) {
         let ext = volume["fs"] == "ext4";
+        // HFS+ drivers usually overwrite a deleted file's catalog record, so
+        // only what is found is checked.
+        let hfs = volume["fs"] == "hfsplus";
         let mut recovered = 0;
         let mut deleted = 0;
         for file in volume["files"]
@@ -187,8 +196,11 @@ fn deleted_files_are_listed() {
         {
             deleted += 1;
             let path = file["path"].as_str().unwrap();
-            let entry = find(fs.as_ref(), path, true)
-                .unwrap_or_else(|| panic!("{name}: deleted {path} not listed"));
+            let found = find(fs.as_ref(), path, true);
+            if hfs && found.as_ref().is_none_or(|e| !e.deleted) {
+                continue;
+            }
+            let entry = found.unwrap_or_else(|| panic!("{name}: deleted {path} not listed"));
             assert!(entry.deleted, "{name}: {path} isn't marked deleted");
             // ext4 clears a deleted file's size; it comes back only when
             // the journal still has an older copy of its inode.

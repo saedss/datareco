@@ -831,3 +831,57 @@ fn ext4_volumes_list_and_recover_deleted_files_too() {
     std::fs::remove_dir_all(destination).unwrap();
     std::fs::remove_file(image).unwrap();
 }
+
+/// An HFS+ volume with a resource fork and a deleted file left in the catalog.
+fn hfs_volume(name: &str) -> PathBuf {
+    use datareco_fs::testutil::{HFS_ROOT, HfsBuilder, HfsOptions, text};
+    let mut b = HfsBuilder::new(HfsOptions::default());
+    b.label("Mac Disk");
+    let readme = b.file(HFS_ROOT, "readme.txt", b"hello from HFS+\n");
+    b.resource(readme, b"resource fork bytes");
+    let docs = b.mkdir(HFS_ROOT, "docs");
+    b.file(docs, "notes.txt", &text("notes", 5000));
+    let old = b.file(HFS_ROOT, "old.txt", &text("old", 3000));
+    b.delete(old);
+    temp_image(name, &b.build())
+}
+
+#[test]
+fn hfs_plus_volumes_list_read_forks_and_recover() {
+    let image = hfs_volume("hfsplus.img");
+    let out = datareco(&["ls", image.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("HFS+ \"Mac Disk\""), "{text}");
+    assert!(text.contains("block size 4.0 KiB"), "{text}");
+    assert!(text.contains("deleted  old.txt"), "{text}");
+
+    let out = datareco(&[
+        "cat",
+        image.to_str().unwrap(),
+        "readme.txt",
+        "--stream",
+        "rsrc",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"resource fork bytes");
+
+    let destination = temp_folder("hfs-recovered");
+    let out = datareco(&[
+        "recover",
+        image.to_str().unwrap(),
+        "--to",
+        destination.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read(destination.join("docs").join("notes.txt")).unwrap(),
+        datareco_fs::testutil::text("notes", 5000)
+    );
+    assert_eq!(
+        std::fs::read(destination.join("old.txt")).unwrap(),
+        datareco_fs::testutil::text("old", 3000)
+    );
+    std::fs::remove_dir_all(destination).unwrap();
+    std::fs::remove_file(image).unwrap();
+}

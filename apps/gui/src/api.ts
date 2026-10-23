@@ -168,6 +168,7 @@ export type EntryId =
   | { kind: "fixedRoot" }
   | { kind: "record"; number: number }
   | { kind: "inode"; number: number; deleted: boolean }
+  | { kind: "catalog"; id: number; deleted: boolean }
   | { kind: "orphans" }
   | { kind: "lostFolder"; number: number }
   | { kind: "span"; offset: number; length: number }
