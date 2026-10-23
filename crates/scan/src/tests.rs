@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use datareco_fs::testutil::{
-    EXT_ROOT, ExtBuilder, ExtOptions, FatBuilder, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, STAMP,
-    disk, noise, text,
+    EXT_ROOT, ExtBuilder, ExtOptions, FatBuilder, HFS_ROOT, HfsBuilder, HfsOptions, NTFS_CLUSTER,
+    NTFS_ROOT, NtfsBuilder, STAMP, disk, noise, text,
 };
 use datareco_fs::{Entry, FileSystem, FsKind, read_to_end, resolve};
 
@@ -218,6 +218,21 @@ fn scans_find_ext_volumes_and_open_them_from_a_backup_superblock() {
     let fs = open_found(Arc::clone(&disk), volume).unwrap();
     let notes = resolve(fs.as_ref(), "docs/notes.txt", false).unwrap();
     assert_eq!(read_all(fs.as_ref(), &notes), text("notes", 4000));
+}
+
+#[test]
+fn a_quick_scan_finds_an_hfs_plus_partition() {
+    let mut b = HfsBuilder::new(HfsOptions::default());
+    b.label("Macintosh HD");
+    b.file(HFS_ROOT, "hello.txt", &text("hello", 500));
+    let quick = disk(mbr_disk(&[(1 << 20, 0xAF, &b.build())]));
+    let found = Scan::run(&quick, ScanMode::Quick).unwrap();
+    let volume = find(&found, FsKind::HfsPlus);
+    assert_eq!((volume.state, volume.in_table), (VolumeState::Intact, true));
+    assert_eq!(volume.label.as_deref(), Some("Macintosh HD"));
+    let fs = open_found(Arc::clone(&quick), volume).unwrap();
+    let hello = resolve(fs.as_ref(), "hello.txt", false).unwrap();
+    assert_eq!(read_all(fs.as_ref(), &hello), text("hello", 500));
 }
 
 #[test]

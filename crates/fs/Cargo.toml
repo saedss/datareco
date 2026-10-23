@@ -12,6 +12,7 @@ datareco-io.workspace = true
 datareco-partitions.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+unicode-normalization.workspace = true
 
 [features]
 # In-memory volume builders, for other crates' tests.

@@ -68,7 +68,7 @@ jobs:
 
   test-images:
     name: Test disk images
-    # Formatting and mounting FAT/exFAT/NTFS/ext4 images needs Linux tools, so
+    # Formatting and mounting FAT/exFAT/NTFS/ext4/HFS+ images needs Linux tools, so
     # this job runs on Linux. It only produces test data; it builds no app.
     # Same Ubuntu release as testdata/docker/Dockerfile.
     runs-on: ubuntu-24.04
@@ -77,7 +77,11 @@ jobs:
       - name: Install file-system tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y dosfstools exfatprogs exfat-fuse ntfs-3g e2fsprogs fdisk
+          sudo apt-get install -y dosfstools exfatprogs exfat-fuse ntfs-3g e2fsprogs fdisk hfsprogs
+          # HFS+ needs a kernel driver that cloud kernels keep in their extra
+          # modules. Without it, the generator skips the HFS+ image.
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || echo "no extra kernel modules"
+          sudo modprobe hfsplus || echo "no HFS+ driver in this kernel"
       - name: Build images
         # GITHUB_ACTIONS tells the generator to report failures as annotations.
         run: sudo --preserve-env=GITHUB_ACTIONS python3 testdata/make_images.py --out testdata/out

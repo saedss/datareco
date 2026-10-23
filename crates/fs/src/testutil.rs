@@ -11,8 +11,10 @@ use crate::FsKind;
 use crate::fat::lfn_checksum;
 
 mod ext;
+mod hfsplus;
 mod ntfs;
 pub use ext::{EXT_ROOT, ExtBuilder, ExtOptions};
+pub use hfsplus::{HFS_ROOT, HfsBuilder, HfsOptions};
 pub use ntfs::{CLUSTER as NTFS_CLUSTER, NtfsBuilder, ROOT as NTFS_ROOT};
 
 /// 2024-01-15 10:30:00 UTC, as seconds and as FAT date/time.

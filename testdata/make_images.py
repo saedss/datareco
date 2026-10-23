@@ -313,7 +313,7 @@ PROFILES: dict[str, Callable[[], Profile]] = {"full": full_profile, "small": sma
 
 @dataclass
 class VolumeSpec:
-    fs: str  # fat12 | fat16 | fat32 | exfat | ntfs | ext4
+    fs: str  # fat12 | fat16 | fat32 | exfat | ntfs | ext4 | hfsplus
     label: str
     profile: str = "full"
     size: int = 0  # partition size in bytes (partitioned disks only)
@@ -352,6 +352,8 @@ BASE_IMAGES = [
               [VolumeSpec("ntfs", "DR_NTFS")]),
     ImageSpec("ext4", "ext4 volume (4 KiB blocks), no partition table", 32 * MiB, "superfloppy",
               [VolumeSpec("ext4", "dr_ext4")]),
+    ImageSpec("hfsplus", "HFS+ volume, no partition table", 32 * MiB, "superfloppy",
+              [VolumeSpec("hfsplus", "dr_hfsplus")]),
     ImageSpec("mbr", "MBR disk: primary FAT32, then NTFS and ext4 as logical partitions", 160 * MiB, "mbr", [
         VolumeSpec("fat32", "DR_P1_FAT32", size=48 * MiB, mbr_type="c"),
         VolumeSpec("ntfs", "DR_P5_NTFS", size=48 * MiB, mbr_type="7", logical=True),
@@ -472,6 +474,8 @@ def mkfs(fs: str, dev: str, label: str, start_lba: int) -> None:
     elif fs == "ext4":
         run("mkfs.ext4", "-F", "-q", "-b", 4096, "-L", label,
             "-E", "nodiscard,lazy_itable_init=0,lazy_journal_init=0", dev)
+    elif fs == "hfsplus":
+        run("mkfs.hfsplus", "-v", label, dev)
     else:
         raise ValueError(f"unknown file system {fs}")
 
@@ -486,6 +490,8 @@ def check_fs(fs: str, dev: str) -> None:
         run("ntfsfix", "-n", dev)
     elif fs == "ext4":
         run("e2fsck", "-fn", dev)
+    elif fs == "hfsplus":
+        run("fsck.hfsplus", "-n", dev)
 
 
 def start_fuse(cmd: list[str], mnt: Path, log_file: IO[bytes]) -> subprocess.Popen[bytes]:
@@ -529,6 +535,8 @@ def mounted(fs: str, dev: str) -> Iterator[Path]:
                 fuse_process = start_fuse(["mount.exfat-fuse", "-d", dev, str(mnt)], mnt, fuse_log)
         elif fs == "ext4":
             run("mount", "-t", "ext4", dev, mnt)
+        elif fs == "hfsplus":
+            run("mount", "-t", "hfsplus", dev, mnt)
         elif fs == "ntfs":
             fuse_process = start_fuse(
                 ["ntfs-3g", "-o", "streams_interface=windows,no_detach", dev, str(mnt)], mnt, fuse_log
@@ -735,7 +743,31 @@ def selected_names(only: list[str] | None) -> list[str]:
     return [name for name in ALL_NAMES if name in only]
 
 
+def hfsplus_missing() -> str | None:
+    """Why HFS+ images can't be made here, if they can't: they need hfsprogs
+    and a kernel with the HFS+ driver, which some (cloud, Docker) lack."""
+    if shutil.which("mkfs.hfsplus") is None:
+        return "mkfs.hfsplus is missing (apt install hfsprogs)"
+    try:
+        subprocess.run(["modprobe", "hfsplus"], capture_output=True)
+    except OSError:
+        pass  # no modprobe: the driver may still be built in
+    try:
+        known = Path("/proc/filesystems").read_text()
+    except OSError:
+        known = ""
+    if not re.search(r"\bhfsplus\b", known):
+        return "this kernel has no HFS+ driver (try: apt install linux-modules-extra-$(uname -r))"
+    return None
+
+
 def build_all(out: Path, names: list[str]) -> None:
+    needs_hfsplus = [s.name for s in BASE_IMAGES if any(v.fs == "hfsplus" for v in s.volumes)]
+    if any(name in needs_hfsplus for name in names):
+        reason = hfsplus_missing()
+        if reason:
+            log(f"Skipping {', '.join(needs_hfsplus)}: {reason}")
+            names = [name for name in names if name not in needs_hfsplus]
     damaged = [d for d in DAMAGED_IMAGES if d.name in names]
     needed_bases = set(names) | {d.base for d in damaged}
     out.mkdir(parents=True, exist_ok=True)
