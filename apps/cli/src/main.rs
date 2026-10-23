@@ -171,7 +171,8 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// List a folder of a FAT, exFAT, NTFS, ext2/3/4 or HFS+ volume, deleted files included.
+    /// List a folder of a FAT, exFAT, NTFS, ext2/3/4, HFS+ or APFS volume, deleted files
+    /// included (APFS: each volume of the container is a folder).
     Ls {
         /// A disk (disk0), volume (C:) or image file path.
         source: String,
@@ -187,7 +188,7 @@ enum Command {
         #[arg(long, short)]
         recursive: bool,
     },
-    /// Print a file from a FAT, exFAT, NTFS, ext2/3/4 or HFS+ volume. Redirect it to a file on
+    /// Print a file from a FAT, exFAT, NTFS, ext2/3/4, HFS+ or APFS volume. Redirect it to a file on
     /// another disk to save it (in Windows PowerShell 5, `>` mangles binary
     /// data: use cmd or PowerShell 7).
     Cat {

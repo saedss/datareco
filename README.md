@@ -1,16 +1,16 @@
 # DataReco
 
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
-partitions, and recover deleted or lost files from NTFS, FAT, exFAT, ext4, HFS+ and more.
+partitions, and recover deleted or lost files from NTFS, FAT, exFAT, ext4, HFS+, APFS and more.
 
 > **Status: early development (Phase 8).** DataReco lists your disks and volumes,
 > has a read-only disk editor (hex view, search, bookmarks, structure templates),
 > reads and checks MBR and GPT partition tables, finds lost partitions, browses
-> NTFS, FAT, exFAT, ext2/3/4 and HFS+ volumes (deleted files included), scans
-> disks for lost and damaged volumes, recovers files to another disk, finds files
-> by their contents when no file system is left, and copies failing disks into
-> image files or onto other disks. APFS, ReFS and btrfs come next; see the
-> [roadmap](docs/ROADMAP.md).
+> NTFS, FAT, exFAT, ext2/3/4, HFS+ and APFS volumes (deleted files included,
+> except on APFS), scans disks for lost and damaged volumes, recovers files to
+> another disk, finds files by their contents when no file system is left, and
+> copies failing disks into image files or onto other disks. ReFS and btrfs come
+> next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -34,14 +34,16 @@ administrator** when it needs to.
   damaged GPT header. **Quick search** and **Full search** find lost partitions
   from the boot sectors, superblocks and backups left on the disk.
 - **Bookmarks** remember places, separately for each disk and image.
-- **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4 and HFS+ volumes on
-  the disk: folders, files and their details, a preview, and deleted files and folders
+- **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+ and APFS
+  volumes on the disk: folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
   ext3 and ext4 clear a deleted file's size and where its data was; DataReco
   finds them in an older copy of the file's inode in the journal, when it still
   has one. On HFS+ (Mac OS Extended), a file's resource fork shows as a stream
   called `rsrc`, and deleted files are found when their catalog records are left
-  over in the catalog's free space.
+  over in the catalog's free space. An APFS container shows a folder per volume
+  ("Macintosh HD - Data", "Preboot", …); encrypted volumes can't be read yet, and
+  deleted APFS files aren't found yet.
   **Show in sectors** jumps to where a file's data is. Tick files and folders and
   **Recover selected…**, or **Recover everything…**, to save them to a folder on
   another disk.

@@ -1,5 +1,5 @@
 //! File-system readers: browse folders, read files, and find deleted entries.
-//! NTFS, FAT12/16/32, exFAT, ext2/3/4 and HFS+ for now; APFS, ReFS and btrfs
+//! NTFS, FAT12/16/32, exFAT, ext2/3/4, HFS+ and APFS for now; ReFS and btrfs
 //! later.
 //!
 //! [`open`] recognizes the file system at an offset of a [`Disk`] and returns
@@ -14,6 +14,7 @@
 //! or a FAT volume's layout worked out from its folders. The [`clues`]
 //! module says what a sector shows, for such a scan.
 
+mod apfs;
 mod bytes;
 mod clusters;
 mod error;
@@ -25,6 +26,8 @@ mod ntfs;
 mod time;
 mod volume;
 
+#[cfg(test)]
+mod tests_apfs;
 #[cfg(test)]
 mod tests_exfat;
 #[cfg(test)]
@@ -89,6 +92,9 @@ pub enum EntryId {
     /// An HFS+ catalog record, by its catalog node ID. A `deleted` one was
     /// found left over in the catalog.
     Catalog { id: u32, deleted: bool },
+    /// An APFS file or folder: a volume of the container (by its place in
+    /// the container's list) and an object id in it.
+    Apfs { volume: u32, id: u64 },
 }
 
 /// Windows file attribute bits, as `Entry::attributes` uses them.
@@ -196,6 +202,7 @@ pub fn can_read(kind: FsKind) -> bool {
             | FsKind::Ext3
             | FsKind::Ext4
             | FsKind::HfsPlus
+            | FsKind::Apfs
     )
 }
 
@@ -212,6 +219,7 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
         FsKind::Ntfs => Ok(Box::new(ntfs::Ntfs::open(volume)?)),
         FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4 => Ok(Box::new(ext::Ext::open(volume)?)),
         FsKind::HfsPlus => Ok(Box::new(hfsplus::HfsPlus::open(volume)?)),
+        FsKind::Apfs => Ok(Box::new(apfs::Apfs::open(volume)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()
@@ -277,6 +285,7 @@ pub fn open_rebuilt(
             Ok(Box::new(ext::Ext::open_with(volume, boot)?))
         }
         FsKind::HfsPlus => Ok(Box::new(hfsplus::HfsPlus::open_with(volume, boot)?)),
+        FsKind::Apfs => Ok(Box::new(apfs::Apfs::open(volume)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()

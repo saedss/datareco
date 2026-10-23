@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use datareco_fs::testutil::{
-    EXT_ROOT, ExtBuilder, ExtOptions, FatBuilder, HFS_ROOT, HfsBuilder, HfsOptions, NTFS_CLUSTER,
-    NTFS_ROOT, NtfsBuilder, STAMP, disk, noise, text,
+    APFS_ROOT, ApfsBuilder, EXT_ROOT, ExtBuilder, ExtOptions, FatBuilder, HFS_ROOT, HfsBuilder,
+    HfsOptions, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, STAMP, disk, noise, text,
 };
 use datareco_fs::{Entry, FileSystem, FsKind, read_to_end, resolve};
 
@@ -232,6 +232,20 @@ fn a_quick_scan_finds_an_hfs_plus_partition() {
     assert_eq!(volume.label.as_deref(), Some("Macintosh HD"));
     let fs = open_found(Arc::clone(&quick), volume).unwrap();
     let hello = resolve(fs.as_ref(), "hello.txt", false).unwrap();
+    assert_eq!(read_all(fs.as_ref(), &hello), text("hello", 500));
+}
+
+#[test]
+fn a_quick_scan_finds_an_apfs_container() {
+    let mut b = ApfsBuilder::new(1024);
+    let data = b.volume("Data", 0x40, false);
+    b.file(data, APFS_ROOT, "hello.txt", &text("hello", 500));
+    let quick = disk(mbr_disk(&[(1 << 20, 0xAF, &b.build())]));
+    let found = Scan::run(&quick, ScanMode::Quick).unwrap();
+    let volume = find(&found, FsKind::Apfs);
+    assert_eq!((volume.state, volume.in_table), (VolumeState::Intact, true));
+    let fs = open_found(Arc::clone(&quick), volume).unwrap();
+    let hello = resolve(fs.as_ref(), "Data/hello.txt", false).unwrap();
     assert_eq!(read_all(fs.as_ref(), &hello), text("hello", 500));
 }
 

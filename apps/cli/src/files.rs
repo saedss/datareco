@@ -107,11 +107,12 @@ pub fn describe(fs: &dyn FileSystem) -> String {
         .as_ref()
         .map(|l| format!(" \"{l}\""))
         .unwrap_or_default();
-    let unit = if info.name.starts_with("ext") || info.name.starts_with("HFS") {
-        "block"
-    } else {
-        "cluster"
-    };
+    let unit =
+        if info.name.starts_with("ext") || info.name.starts_with("HFS") || info.name == "APFS" {
+            "block"
+        } else {
+            "cluster"
+        };
     format!(
         "{}{label}, {}, {unit} size {}",
         info.name,
