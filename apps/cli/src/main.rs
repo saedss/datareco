@@ -3,13 +3,14 @@
 mod files;
 mod format;
 mod partitions;
+mod scan;
 mod structures;
 
 use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use datareco_io::{DeviceList, Disk, Error, SourceSpec, VolumeInfo, is_elevated, list_devices};
 
 use crate::files::VolumeChoice;
@@ -44,6 +45,34 @@ fn parse_offset(text: &str) -> Result<u64, String> {
     datareco_templates::parse_integer(text)
         .and_then(|n| u64::try_from(n).ok())
         .ok_or_else(|| format!("\"{text}\" is not an offset (use decimal or 0x hex)"))
+}
+
+/// Which volume of the source to use. Without any of these, the only one
+/// DataReco can read.
+#[derive(Args)]
+struct VolumeArgs {
+    /// Which partition, by its number in `datareco partitions`.
+    #[arg(long, short, conflicts_with_all = ["offset", "scan"])]
+    partition: Option<u32>,
+    /// Where the volume starts, as a byte offset (decimal or 0x hex).
+    #[arg(long, value_parser = parse_offset, conflicts_with = "scan")]
+    offset: Option<u64>,
+    /// A scan saved with `datareco scan --save`, to use a volume it found.
+    #[arg(long, requires = "volume")]
+    scan: Option<PathBuf>,
+    /// That volume's number in the scan's list.
+    #[arg(long, requires = "scan")]
+    volume: Option<usize>,
+}
+
+impl VolumeArgs {
+    fn choice(self) -> VolumeChoice {
+        VolumeChoice {
+            partition: self.partition,
+            offset: self.offset,
+            scan: self.scan.zip(self.volume),
+        }
+    }
 }
 
 /// DataReco: disk editor and data recovery tool. Never writes to disks.
@@ -115,12 +144,8 @@ enum Command {
         /// The folder, e.g. "docs/photos" (default: the top folder).
         #[arg(default_value = "")]
         path: String,
-        /// Which partition, by its number in `datareco partitions`.
-        #[arg(long, short, conflicts_with = "offset")]
-        partition: Option<u32>,
-        /// Where the volume starts, as a byte offset (decimal or 0x hex).
-        #[arg(long, value_parser = parse_offset)]
-        offset: Option<u64>,
+        #[command(flatten)]
+        volume: VolumeArgs,
         /// Show only deleted files and folders.
         #[arg(long)]
         deleted: bool,
@@ -136,15 +161,52 @@ enum Command {
         source: String,
         /// The file, e.g. "docs/notes.txt".
         path: String,
-        /// Which partition, by its number in `datareco partitions`.
-        #[arg(long, short, conflicts_with = "offset")]
-        partition: Option<u32>,
-        /// Where the volume starts, as a byte offset (decimal or 0x hex).
-        #[arg(long, value_parser = parse_offset)]
-        offset: Option<u64>,
+        #[command(flatten)]
+        volume: VolumeArgs,
         /// An NTFS alternate data stream of the file instead of its contents.
         #[arg(long)]
         stream: Option<String>,
+        /// When a deleted file and a live one have the same name, take the deleted one.
+        #[arg(long)]
+        deleted: bool,
+    },
+    /// Look for volumes, including lost and damaged ones (after a format, a
+    /// wiped partition table or a damaged boot sector), and list them best first.
+    Scan {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+        /// Look at every sector: finds volumes whose boot sector, partition
+        /// entry or FAT is gone. Slow on big disks.
+        #[arg(long)]
+        full: bool,
+        /// Save the scan to this file as it goes, to use its volumes later
+        /// (`ls`, `cat` and `recover` take `--scan FILE --volume N`) or to
+        /// carry on after stopping it.
+        #[arg(long)]
+        save: Option<PathBuf>,
+        /// Carry on with a scan saved with --save (or show what it found).
+        #[arg(long, conflicts_with = "full")]
+        resume: Option<PathBuf>,
+    },
+    /// Save files and folders from a volume to a folder on another disk,
+    /// with their times, a log and SHA-256 checksums.
+    Recover {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+        /// What to save, e.g. "Documents" or "Photos/beach.jpg" (default:
+        /// everything on the volume).
+        paths: Vec<String>,
+        /// The folder to save into, on another disk.
+        #[arg(long, short = 't')]
+        to: PathBuf,
+        #[command(flatten)]
+        volume: VolumeArgs,
+        /// Leave out deleted files found inside the folders being saved.
+        #[arg(long)]
+        no_deleted: bool,
+        /// Leave out NTFS alternate data streams.
+        #[arg(long)]
+        no_streams: bool,
         /// When a deleted file and a live one have the same name, take the deleted one.
         #[arg(long)]
         deleted: bool,
@@ -192,31 +254,43 @@ fn main() -> ExitCode {
         Command::Ls {
             source,
             path,
-            partition,
-            offset,
+            volume,
             deleted,
             recursive,
-        } => files::ls(
-            &source,
-            &path,
-            &VolumeChoice { partition, offset },
-            deleted,
-            recursive,
-        ),
+        } => files::ls(&source, &path, &volume.choice(), deleted, recursive),
         Command::Cat {
             source,
             path,
-            partition,
-            offset,
+            volume,
             stream,
             deleted,
-        } => files::cat(
-            &source,
-            &path,
-            &VolumeChoice { partition, offset },
-            stream.as_deref(),
+        } => files::cat(&source, &path, &volume.choice(), stream.as_deref(), deleted),
+        Command::Scan {
+            source,
+            full,
+            save,
+            resume,
+        } => scan::scan(&source, full, save.as_deref(), resume.as_deref()),
+        Command::Recover {
+            source,
+            paths,
+            to,
+            volume,
+            no_deleted,
+            no_streams,
             deleted,
-        ),
+        } => scan::recover(&scan::RecoverRequest {
+            source: &source,
+            paths: &paths,
+            to: &to,
+            choice: &volume.choice(),
+            options: datareco_scan::RecoverOptions {
+                deleted: !no_deleted,
+                streams: !no_streams,
+            },
+            prefer_deleted: deleted,
+        }),
+
         Command::Find {
             source,
             text,

@@ -61,6 +61,19 @@ pub struct FoundPartition {
     pub in_table: bool,
 }
 
+/// Where a search got to and what it found, to save it and carry on later
+/// with [`Scan::restore`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanState {
+    pub mode: ScanMode,
+    /// The next sector to look at.
+    pub next: u64,
+    pub tail_done: bool,
+    /// Sectors where clues were found; restoring reads them again.
+    pub clue_sectors: Vec<u64>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanProgress {
@@ -79,6 +92,17 @@ enum Clue {
     Ext { offset: u64, ext: Ext },
     Gpt { offset: u64, header: gpt::Header },
     Table { offset: u64, table: mbr::Mbr },
+}
+
+impl Clue {
+    fn offset(&self) -> u64 {
+        match self {
+            Clue::Boot { offset, .. }
+            | Clue::Ext { offset, .. }
+            | Clue::Gpt { offset, .. }
+            | Clue::Table { offset, .. } => *offset,
+        }
+    }
 }
 
 /// A search in progress. Call [`Scan::step`] until it's done, then
@@ -173,8 +197,14 @@ impl Scan {
         }
         let mut data = vec![0; usize::try_from((end - first) * self.sector_size).unwrap_or(0)];
         disk.read_at(first * self.sector_size, &mut data)?;
+        self.classify_sectors(first, &data);
+        self.examined_until = end;
+        Ok(())
+    }
+
+    fn classify_sectors(&mut self, first: u64, data: &[u8]) {
         let sector_size = usize::try_from(self.sector_size).unwrap_or(512);
-        for (lba, sector) in (first..).zip(data.chunks(sector_size)) {
+        for (lba, sector) in (first..).zip(data.chunks_exact(sector_size)) {
             if self.clues.len() >= MAX_CLUES {
                 break;
             }
@@ -182,8 +212,67 @@ impl Scan {
             self.clues
                 .extend(classify(sector, offset, self.sector_size));
         }
-        self.examined_until = end;
-        Ok(())
+    }
+
+    /// Looks at sectors the caller has read itself, as a full search would:
+    /// `data` holds whole sectors starting at sector `lba`. Feeding them in
+    /// order lets one pass over a disk serve several searches; finish with
+    /// [`Scan::finish`].
+    pub fn feed(&mut self, lba: u64, data: &[u8]) {
+        let count = data.len() as u64 / self.sector_size;
+        let end = lba.saturating_add(count).min(self.sectors);
+        let first = lba.max(self.examined_until);
+        if first < end {
+            let skip = usize::try_from((first - lba) * self.sector_size).unwrap_or(usize::MAX);
+            let take = usize::try_from((end - first) * self.sector_size).unwrap_or(0);
+            if let Some(sectors) = data.get(skip..skip.saturating_add(take)) {
+                self.classify_sectors(first, sectors);
+            }
+            self.examined_until = end;
+        }
+        self.next = self.next.max(end);
+    }
+
+    /// Ends a search fed with [`Scan::feed`]: looks at the disk's last
+    /// sectors (backup GPT headers, NTFS backup boot sectors).
+    pub fn finish(&mut self, disk: &Disk) -> Result<ScanProgress> {
+        self.next = self.sectors;
+        self.step(disk, 0)
+    }
+
+    /// Where the search got to, to save it.
+    pub fn state(&self) -> ScanState {
+        let mut clue_sectors: Vec<u64> = self
+            .clues
+            .iter()
+            .map(|clue| clue.offset() / self.sector_size)
+            .collect();
+        clue_sectors.sort_unstable();
+        clue_sectors.dedup();
+        ScanState {
+            mode: self.mode,
+            next: self.next,
+            tail_done: self.tail_done,
+            clue_sectors,
+        }
+    }
+
+    /// Carries on with a saved search, reading its clues' sectors again.
+    pub fn restore(disk: &Disk, state: &ScanState) -> Result<Scan> {
+        let mut scan = Scan::new(disk, state.mode);
+        let sector_size = usize::try_from(scan.sector_size).unwrap_or(512);
+        for &lba in &state.clue_sectors {
+            if lba >= scan.sectors {
+                continue;
+            }
+            let mut sector = vec![0; sector_size];
+            disk.read_at(lba * scan.sector_size, &mut sector)?;
+            scan.classify_sectors(lba, &sector);
+        }
+        scan.next = state.next.min(scan.sectors);
+        scan.examined_until = scan.next;
+        scan.tail_done = state.tail_done;
+        Ok(scan)
     }
 
     /// The partitions the clues so far point to, checked against the disk,

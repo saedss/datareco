@@ -388,3 +388,141 @@ fn ls_and_cat_find_the_volume_in_a_partition() {
     );
     std::fs::remove_file(image).unwrap();
 }
+
+/// A FAT32 volume whose boot sector, backup and FATs were wiped.
+fn fat_without_fat(name: &str) -> PathBuf {
+    use datareco_fs::FsKind;
+    use datareco_fs::testutil::{FatBuilder, text};
+    let mut b = FatBuilder::new(FsKind::Fat32, 70_000);
+    b.label(b"LOST FAT   ");
+    let root = b.root();
+    b.file(root, "readme.txt", b"still here\n");
+    let (docs, _) = b.mkdir(root, "docs");
+    b.file(docs, "notes.txt", &text("notes", 3000));
+    let data_start = b.data_start();
+    let mut image = b.build();
+    image[..data_start].fill(0);
+    temp_image(name, &image)
+}
+
+fn temp_folder(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("datareco-cli-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    path
+}
+
+#[test]
+fn scan_finds_a_volume_without_its_fat_and_recover_saves_it() {
+    let image = fat_without_fat("nofat.img");
+    let image_path = image.to_str().unwrap();
+    let saved = temp_folder("nofat-scan.json");
+    let out = datareco(&[
+        "scan",
+        image_path,
+        "--full",
+        "--save",
+        saved.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("Found 1 volume(s) (full scan)"), "{text}");
+    assert!(text.contains("FAT32 \"LOST FAT\""), "{text}");
+    assert!(text.contains("rebuilt from the folders found"), "{text}");
+    assert!(text.contains("its FAT is gone"), "{text}");
+    assert!(saved.exists());
+
+    // Its volumes can be used like partitions.
+    let scan_args = ["--scan", saved.to_str().unwrap(), "--volume", "1"];
+    let out = datareco(&[&["ls", image_path, "-r"][..], &scan_args[..]].concat());
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("docs/notes.txt"), "{}", stdout(&out));
+
+    let destination = temp_folder("nofat-recovered");
+    let out = datareco(
+        &[
+            &["recover", image_path, "--to", destination.to_str().unwrap()][..],
+            &scan_args[..],
+        ]
+        .concat(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Saved 2 files and 1 folder ("),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(
+        std::fs::read(destination.join("readme.txt")).unwrap(),
+        b"still here\n"
+    );
+    assert_eq!(
+        std::fs::read(destination.join("docs").join("notes.txt")).unwrap(),
+        datareco_fs::testutil::text("notes", 3000)
+    );
+    let logs = std::fs::read_dir(&destination)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".log")
+        })
+        .count();
+    assert_eq!(logs, 1);
+
+    // A volume number the scan doesn't have.
+    let out = datareco(&[
+        "ls",
+        image_path,
+        "--scan",
+        saved.to_str().unwrap(),
+        "--volume",
+        "7",
+    ]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("no volume 7"), "{}", stderr(&out));
+    std::fs::remove_dir_all(destination).unwrap();
+    std::fs::remove_file(saved).unwrap();
+    std::fs::remove_file(image).unwrap();
+}
+
+#[test]
+fn recover_saves_the_paths_asked_for() {
+    let image = fat_volume("recover-paths.img");
+    let destination = temp_folder("recover-paths");
+    let out = datareco(&[
+        "recover",
+        image.to_str().unwrap(),
+        "docs/notes.txt",
+        "old.txt",
+        "--to",
+        destination.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read(destination.join("notes.txt")).unwrap(),
+        datareco_fs::testutil::text("notes", 3000)
+    );
+    assert_eq!(
+        std::fs::read(destination.join("old.txt")).unwrap(),
+        b"deleted, not gone\n"
+    );
+    assert!(!destination.join("readme.txt").exists());
+
+    let out = datareco(&[
+        "recover",
+        image.to_str().unwrap(),
+        "nope.txt",
+        "--to",
+        destination.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("nope.txt was not found"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_dir_all(destination).unwrap();
+    std::fs::remove_file(image).unwrap();
+}

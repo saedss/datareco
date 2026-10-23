@@ -37,7 +37,15 @@ pub(crate) struct Exfat {
 
 impl Exfat {
     pub fn open(volume: Volume) -> Result<Exfat, FsError> {
-        let boot = volume.read_vec(0, 512)?;
+        Self::open_with_boot(volume, None)
+    }
+
+    /// Opens the volume, using `boot` as its boot sector if given (a backup copy).
+    pub fn open_with_boot(volume: Volume, boot: Option<Vec<u8>>) -> Result<Exfat, FsError> {
+        let boot = match boot {
+            Some(boot) => boot,
+            None => volume.read_vec(0, 512)?,
+        };
         let damaged = || FsError::damaged("The exFAT boot sector is damaged.");
         let sector_shift = u8_at(&boot, 108).ok_or_else(damaged)?;
         let cluster_shift = u8_at(&boot, 109).ok_or_else(damaged)?;

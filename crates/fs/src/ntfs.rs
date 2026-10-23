@@ -6,9 +6,9 @@
 //! files whose folder is gone ("Lost files").
 
 mod lznt1;
-mod record;
+pub(crate) mod record;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::bytes::{u8_at, u16_at, u64_at, utf16_text};
@@ -33,21 +33,35 @@ const MAX_CHECKED_CLUSTERS: u64 = 1 << 24;
 /// Compression units larger than this are garbage.
 const MAX_UNIT: u64 = 4 << 20;
 
-pub(crate) const LOST_FILES: &str = "Lost files";
+/// What a scan of the disk found, for opening a damaged volume.
+#[derive(Default)]
+pub(crate) struct Options {
+    /// A boot sector to use instead of the volume's first sector (its backup).
+    pub boot: Option<Vec<u8>>,
+    /// MFT records found on the disk: record number → offset in the volume.
+    /// Used when the MFT itself doesn't have a readable copy.
+    pub found: BTreeMap<u64, u64>,
+}
 
 pub(crate) struct Ntfs {
     volume: Volume,
     info: VolumeInfo,
     cluster_size: u64,
     record_size: u64,
-    /// The MFT itself (`$MFT`'s data).
+    /// The MFT itself (`$MFT`'s data). Empty if it can't be located.
     mft: Stream,
+    /// Where the MFT mirror (copies of records 0-3) is, in the volume.
+    mirror: Option<u64>,
+    found: BTreeMap<u64, u64>,
     index: OnceLock<Result<Index, String>>,
     /// The last decompressed compression unit, keyed by record, stream and unit.
     unit: Mutex<Option<(UnitKey, Arc<Vec<u8>>)>>,
 }
 
 type UnitKey = (u64, String, u64);
+
+/// A record's bytes, and where it is on the disk if known.
+type Located = (Vec<u8>, Option<u64>);
 
 /// A data stream, joined from the pieces in all of a file's records.
 #[derive(Clone, Debug)]
@@ -60,8 +74,8 @@ struct Stream {
 
 #[derive(Clone, Debug)]
 enum Data {
-    /// Stored in the MFT record; `at` is where, in bytes into the MFT.
-    Resident { bytes: Vec<u8>, at: u64 },
+    /// Stored in the MFT record; `at` is where on the disk, if known.
+    Resident { bytes: Vec<u8>, at: Option<u64> },
     Runs {
         runs: Vec<Run>,
         initialized: u64,
@@ -82,8 +96,10 @@ struct File {
 /// What a scan of the whole MFT found.
 struct Index {
     children: HashMap<u64, Vec<u64>>,
-    /// Records whose folder no longer exists.
+    /// Records whose folder's record now holds something else.
     orphans: Vec<u64>,
+    /// Records whose folder's record is gone, by that folder's record number.
+    lost_folders: BTreeMap<u64, Vec<u64>>,
     /// Extension records by base record.
     extensions: HashMap<u64, Vec<u64>>,
     /// `$Bitmap`: one bit per cluster, set if in use.
@@ -99,15 +115,60 @@ struct Seen {
     is_dir: bool,
 }
 
+/// `Seen` by record number: a vector for the MFT, a map for records found
+/// elsewhere (their numbers can be anything).
+#[derive(Default)]
+struct SeenMap {
+    dense: Vec<Seen>,
+    sparse: HashMap<u64, Seen>,
+}
+
+impl SeenMap {
+    fn get(&self, number: u64) -> Option<&Seen> {
+        usize::try_from(number)
+            .ok()
+            .and_then(|n| self.dense.get(n))
+            .filter(|s| s.valid)
+            .or_else(|| self.sparse.get(&number))
+    }
+
+    fn set(&mut self, number: u64, seen: Seen) {
+        match usize::try_from(number) {
+            Ok(n) if n < self.dense.len() => self.dense[n] = seen,
+            Ok(n) if n == self.dense.len() => self.dense.push(seen),
+            _ if seen.valid => {
+                self.sparse.insert(number, seen);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Where a file's folder reference leads.
+enum Parent {
+    Found,
+    /// The record is there but holds something else now.
+    Reused,
+    /// No record at all.
+    Missing,
+}
+
 /// A piece of a `$DATA` attribute, owned.
 enum Piece {
-    Resident { bytes: Vec<u8>, at: u64 },
+    Resident { bytes: Vec<u8>, at: Option<u64> },
     NonResident(record::NonResident),
 }
 
 impl Ntfs {
     pub fn open(volume: Volume) -> Result<Ntfs, FsError> {
-        let boot = volume.read_vec(0, 512)?;
+        Self::open_with(volume, Options::default())
+    }
+
+    pub fn open_with(volume: Volume, options: Options) -> Result<Ntfs, FsError> {
+        let boot = match options.boot {
+            Some(boot) => boot,
+            None => volume.read_vec(0, 512)?,
+        };
         let damaged = || FsError::damaged("The NTFS boot sector is damaged.");
         let sector = u64::from(u16_at(&boot, 11).ok_or_else(damaged)?);
         let raw = u8_at(&boot, 13).ok_or_else(damaged)?;
@@ -149,16 +210,24 @@ impl Ntfs {
                 flags: 0,
                 data: Data::Resident {
                     bytes: Vec::new(),
-                    at: 0,
+                    at: None,
                 },
             },
+            mirror: mirror_lcn.checked_mul(cluster_size),
+            found: options.found,
             index: OnceLock::new(),
             unit: Mutex::new(None),
         };
         // If the MFT's first record is damaged, its copy in the MFT mirror says where the MFT is.
-        ntfs.mft = ntfs
+        match ntfs
             .locate_mft(mft_lcn)
-            .or_else(|_| ntfs.locate_mft(mirror_lcn))?;
+            .or_else(|_| ntfs.locate_mft(mirror_lcn))
+        {
+            Ok(mft) => ntfs.mft = mft,
+            // Records a scan found elsewhere stand in for a lost MFT.
+            Err(_) if !ntfs.found.is_empty() => {}
+            Err(error) => return Err(error),
+        }
         ntfs.info.label = ntfs.label();
         Ok(ntfs)
     }
@@ -171,7 +240,7 @@ impl Ntfs {
         if !record::fixup(&mut first) {
             return Err(damaged());
         }
-        let mut pieces = data_pieces(MFT, &first, self.record_size, "");
+        let mut pieces = data_pieces(None, &first, "");
         // A very fragmented MFT lists the rest of its runs in extension records.
         let list = record::attributes(&first)
             .into_iter()
@@ -190,7 +259,7 @@ impl Ntfs {
                     continue;
                 };
                 if record::header(&extension).is_some_and(|h| h.base == MFT) {
-                    pieces.extend(data_pieces(entry.record, &extension, self.record_size, ""));
+                    pieces.extend(data_pieces(None, &extension, ""));
                 }
             }
         }
@@ -202,7 +271,7 @@ impl Ntfs {
     }
 
     fn label(&self) -> Option<String> {
-        let volume = self.read_record(VOLUME).ok()??;
+        let (volume, _) = self.read_record(VOLUME).ok()??;
         record::attributes(&volume)
             .iter()
             .find(|a| a.kind == record::VOLUME_NAME)
@@ -210,9 +279,42 @@ impl Ntfs {
             .and_then(utf16_text)
     }
 
-    /// An MFT record with its fixups undone; `None` if it isn't one.
-    fn read_record(&self, number: u64) -> Result<Option<Vec<u8>>, FsError> {
-        self.read_record_in(&self.mft, number)
+    /// An MFT record with its fixups undone, and where it is on the disk;
+    /// `None` if there's no readable copy. The MFT's copy comes first, then
+    /// one a scan found elsewhere, then (records 0-3) the MFT mirror's.
+    fn read_record(&self, number: u64) -> Result<Option<Located>, FsError> {
+        let from_mft = self.read_record_in(&self.mft, number);
+        if let Ok(Some(record)) = from_mft {
+            let at = number
+                .checked_mul(self.record_size)
+                .and_then(|at| self.mft_offset(at));
+            return Ok(Some((record, at)));
+        }
+        for at in self.other_copies(number) {
+            if let Some(mut record) = self.raw_at(at)
+                && record::fixup(&mut record)
+            {
+                return Ok(Some((record, Some(self.volume.absolute(at)))));
+            }
+        }
+        from_mft.map(|_| None)
+    }
+
+    /// Other places record `number` may be, in the volume: where a scan found
+    /// it, and for records 0-3, the MFT mirror.
+    fn other_copies(&self, number: u64) -> Vec<u64> {
+        let mut places: Vec<u64> = self.found.get(&number).copied().into_iter().collect();
+        if number < 4
+            && let Some(mirror) = self.mirror
+        {
+            places.extend(mirror.checked_add(number * self.record_size));
+        }
+        places
+    }
+
+    /// A record's raw bytes at `offset` in the volume.
+    fn raw_at(&self, offset: u64) -> Option<Vec<u8>> {
+        self.volume.read_vec(offset, self.record_size).ok()
     }
 
     fn read_record_in(&self, mft: &Stream, number: u64) -> Result<Option<Vec<u8>>, FsError> {
@@ -277,7 +379,7 @@ impl Ntfs {
         };
         let count = self.mft.size.min(stored).min(self.volume.size()) / size;
         let per_chunk = (SCAN_CHUNK / size).max(1);
-        let mut seen: Vec<Seen> = Vec::new();
+        let mut seen = SeenMap::default();
         let mut links: Vec<(u64, u64, u16)> = Vec::new();
         let mut extensions: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut first = 0;
@@ -287,7 +389,7 @@ impl Ntfs {
             let read = match self.read_stream(MFT, &self.mft, first * size, &mut chunk) {
                 Ok(read) => read,
                 // Past the end of the volume, or unreadable: the rest of the MFT is lost.
-                Err(_) if first > 0 => break,
+                Err(_) if first > 0 || !self.found.is_empty() => break,
                 Err(error) => return Err(error),
             };
             chunk.truncate(read);
@@ -296,44 +398,70 @@ impl Ntfs {
                 .enumerate()
             {
                 let number = first + i as u64;
-                seen.push(scan_record(number, record, &mut links, &mut extensions));
+                let mut found = scan_record(number, record, &mut links, &mut extensions);
+                // A damaged copy in the MFT: try the others.
+                for at in self.other_copies(number) {
+                    if found.valid {
+                        break;
+                    }
+                    if let Some(mut copy) = self.raw_at(at) {
+                        found = scan_record(number, &mut copy, &mut links, &mut extensions);
+                    }
+                }
+                seen.set(number, found);
             }
             if (read as u64) < records * size {
                 break;
             }
             first += records;
         }
+        // Records found past what's left of the MFT.
+        for (&number, &at) in self.found.range(first..) {
+            if let Some(mut record) = self.raw_at(at) {
+                let found = scan_record(number, &mut record, &mut links, &mut extensions);
+                seen.set(number, found);
+            }
+        }
 
         links.sort_unstable();
         links.dedup();
         let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut placed = HashSet::new();
-        let mut lost = BTreeSet::new();
+        let mut reused = BTreeSet::new();
+        let mut lost_folders: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for (child, parent, sequence) in links {
             if child == parent {
                 continue; // the root folder is its own parent
             }
-            if parent_ok(&seen, parent, sequence) {
-                children.entry(parent).or_default().push(child);
-                placed.insert(child);
-            } else {
-                lost.insert(child);
+            match parent_state(&seen, parent, sequence) {
+                Parent::Found => {
+                    children.entry(parent).or_default().push(child);
+                    placed.insert(child);
+                }
+                Parent::Reused => {
+                    reused.insert(child);
+                }
+                Parent::Missing => {
+                    lost_folders.entry(parent).or_default().push(child);
+                    placed.insert(child);
+                }
             }
         }
-        for list in children.values_mut() {
+        for list in children.values_mut().chain(lost_folders.values_mut()) {
             list.dedup();
         }
         Ok(Index {
             children,
-            orphans: lost.into_iter().filter(|n| !placed.contains(n)).collect(),
+            orphans: reused.into_iter().filter(|n| !placed.contains(n)).collect(),
+            lost_folders,
             extensions,
             bitmap: self.cluster_bitmap(),
         })
     }
 
     fn cluster_bitmap(&self) -> Option<Vec<u8>> {
-        let record = self.read_record(BITMAP).ok()??;
-        let pieces = data_pieces(BITMAP, &record, self.record_size, "");
+        let (record, at) = self.read_record(BITMAP).ok()??;
+        let pieces = data_pieces(at, &record, "");
         let mut stream = join(String::new(), &pieces)?;
         let clusters = self.volume.size() / self.cluster_size;
         stream.size = stream.size.min(MAX_BITMAP).min(clusters.div_ceil(8) + 8);
@@ -347,7 +475,7 @@ impl Ntfs {
     fn load(&self, number: u64) -> Result<File, FsError> {
         let index = self.index()?;
         let missing = || FsError::NotFound(format!("MFT record {number}"));
-        let base = self.read_record(number)?.ok_or_else(missing)?;
+        let (base, base_at) = self.read_record(number)?.ok_or_else(missing)?;
         let header = record::header(&base).ok_or_else(missing)?;
 
         let mut others: BTreeSet<u64> = index
@@ -364,9 +492,9 @@ impl Ntfs {
             let entries = record::attribute_list(&self.value(list).unwrap_or_default());
             others.extend(entries.iter().map(|e| e.record).filter(|&n| n != number));
         }
-        let mut records = vec![(number, base)];
+        let mut records = vec![(base_at, base)];
         for other in others {
-            let Ok(Some(extension)) = self.read_record(other) else {
+            let Ok(Some((extension, at))) = self.read_record(other) else {
                 continue;
             };
             let Some(h) = record::header(&extension) else {
@@ -383,14 +511,14 @@ impl Ntfs {
                             || h.base_sequence.wrapping_add(1) == header.sequence)
                 };
             if belongs {
-                records.push((other, extension));
+                records.push((at, extension));
             }
         }
 
         let mut names = Vec::new();
         let mut standard = None;
         let mut streams: Vec<(String, Vec<(u16, Piece)>)> = Vec::new();
-        for (n, record) in &records {
+        for (at, record) in &records {
             for attribute in record::attributes(record) {
                 match attribute.kind {
                     record::STANDARD_INFORMATION if standard.is_none() => {
@@ -400,7 +528,7 @@ impl Ntfs {
                         names.extend(attribute.resident().and_then(record::file_name))
                     }
                     record::DATA => {
-                        let piece = piece(*n, &attribute, self.record_size);
+                        let piece = piece(*at, &attribute);
                         match streams.iter_mut().find(|(name, _)| *name == attribute.name) {
                             Some((_, pieces)) => pieces.push((attribute.flags, piece)),
                             None => streams
@@ -521,22 +649,28 @@ impl Ntfs {
     }
 
     fn lost_files_folder() -> Entry {
-        Entry {
-            id: EntryId::Orphans,
-            name: LOST_FILES.to_owned(),
-            is_dir: true,
-            size: 0,
-            deleted: false,
-            created: None,
-            modified: None,
-            accessed: None,
-            attributes: attributes::DIRECTORY,
-            streams: Vec::new(),
-            note: Some(
-                "Files and folders whose folder no longer exists, so where they were is unknown."
-                    .to_owned(),
-            ),
-        }
+        virtual_folder(
+            EntryId::Orphans,
+            crate::LOST_FILES.to_owned(),
+            "Files and folders whose folder no longer exists, so where they were is unknown.",
+        )
+    }
+
+    /// The folders in "Lost files" that stand for a folder whose own record
+    /// is gone: its files still name it, so they're kept together.
+    fn lost_folder_entries(index: &Index) -> Vec<Entry> {
+        index
+            .lost_folders
+            .keys()
+            .map(|&number| {
+                virtual_folder(
+                    EntryId::LostFolder { number },
+                    format!("Folder {number}"),
+                    "This folder's own MFT record is gone, so its name is unknown; \
+                     what was in it is here.",
+                )
+            })
+            .collect()
     }
 
     fn entries(&self, numbers: &[u64], parent: Option<u64>) -> Result<Vec<Entry>, FsError> {
@@ -771,12 +905,24 @@ impl FileSystem for Ntfs {
             EntryId::Record { number } => {
                 let children = index.children.get(number).map_or(&[][..], Vec::as_slice);
                 let mut entries = self.entries(children, Some(*number))?;
-                if *number == ROOT && !index.orphans.is_empty() {
+                if *number == ROOT && (!index.orphans.is_empty() || !index.lost_folders.is_empty())
+                {
                     entries.push(Self::lost_files_folder());
                 }
                 Ok(entries)
             }
-            EntryId::Orphans => self.entries(&index.orphans, None),
+            EntryId::Orphans => {
+                let mut entries = Self::lost_folder_entries(index);
+                entries.extend(self.entries(&index.orphans, None)?);
+                Ok(entries)
+            }
+            EntryId::LostFolder { number } => {
+                let children = index
+                    .lost_folders
+                    .get(number)
+                    .map_or(&[][..], Vec::as_slice);
+                self.entries(children, Some(*number))
+            }
             _ => Err(FsError::NotFound("That folder".to_owned())),
         }
     }
@@ -797,7 +943,7 @@ impl FileSystem for Ntfs {
         let mut extents: Vec<Extent> = Vec::new();
         match &stream.data {
             Data::Resident { bytes, at } => {
-                if let Some(offset) = self.mft_offset(*at).filter(|_| !bytes.is_empty()) {
+                if let Some(offset) = at.filter(|_| !bytes.is_empty()) {
                     extents.push(Extent {
                         offset,
                         length: bytes.len() as u64,
@@ -880,15 +1026,36 @@ fn scan_record(
 /// Whether `parent` is still the folder a file name pointed at: a folder
 /// whose sequence number matches the reference's, or is one more if the
 /// folder was deleted too (deleting a record bumps its sequence number).
-fn parent_ok(seen: &[Seen], parent: u64, sequence: u16) -> bool {
-    let Some(folder) = usize::try_from(parent).ok().and_then(|p| seen.get(p)) else {
-        return false;
+/// The root folder is always there, even when its record isn't.
+fn parent_state(seen: &SeenMap, parent: u64, sequence: u16) -> Parent {
+    if parent == ROOT {
+        return Parent::Found;
+    }
+    let Some(folder) = seen.get(parent).filter(|s| s.valid) else {
+        return Parent::Missing;
     };
-    folder.valid
-        && folder.is_dir
+    let same = folder.is_dir
         && (sequence == 0
             || folder.sequence == sequence
-            || (!folder.in_use && folder.sequence == sequence.wrapping_add(1)))
+            || (!folder.in_use && folder.sequence == sequence.wrapping_add(1)));
+    if same { Parent::Found } else { Parent::Reused }
+}
+
+/// A folder that isn't on the disk: "Lost files" and the folders in it.
+fn virtual_folder(id: EntryId, name: String, note: &str) -> Entry {
+    Entry {
+        id,
+        name,
+        is_dir: true,
+        size: 0,
+        deleted: false,
+        created: None,
+        modified: None,
+        accessed: None,
+        attributes: attributes::DIRECTORY,
+        streams: Vec::new(),
+        note: Some(note.to_owned()),
+    }
 }
 
 /// The run holding virtual cluster `vcn`.
@@ -907,24 +1074,24 @@ fn size_field(raw: u8, cluster_size: u64) -> Option<u64> {
     }
 }
 
-fn piece(number: u64, attribute: &record::Attribute, record_size: u64) -> Piece {
+/// An attribute's value as a stream piece. `record_at` is where its record
+/// is on the disk, if known.
+fn piece(record_at: Option<u64>, attribute: &record::Attribute) -> Piece {
     match &attribute.value {
         Value::Resident { data, offset } => Piece::Resident {
             bytes: data.to_vec(),
-            at: number
-                .saturating_mul(record_size)
-                .saturating_add(*offset as u64),
+            at: record_at.and_then(|at| at.checked_add(*offset as u64)),
         },
         Value::NonResident(header) => Piece::NonResident(header.clone()),
     }
 }
 
 /// The pieces of a record's `$DATA` attribute called `name`.
-fn data_pieces(number: u64, record: &[u8], record_size: u64, name: &str) -> Vec<(u16, Piece)> {
+fn data_pieces(record_at: Option<u64>, record: &[u8], name: &str) -> Vec<(u16, Piece)> {
     record::attributes(record)
         .iter()
         .filter(|a| a.kind == record::DATA && a.name == name)
-        .map(|a| (a.flags, piece(number, a, record_size)))
+        .map(|a| (a.flags, piece(record_at, a)))
         .collect()
 }
 

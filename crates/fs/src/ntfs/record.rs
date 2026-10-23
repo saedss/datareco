@@ -61,6 +61,42 @@ pub(crate) fn fixup(record: &mut [u8]) -> bool {
     true
 }
 
+/// An MFT record seen in a sector, for a scan of a disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MftRecord {
+    /// The record's number (where it belongs in its MFT).
+    pub number: u64,
+    /// The record's size in bytes (usually 1024).
+    pub size: u64,
+}
+
+/// Whether a sector starts an MFT record whose header holds up. Records
+/// written before Windows XP don't store their number and aren't reported.
+pub fn mft_record(sector: &[u8]) -> Option<MftRecord> {
+    if !has(sector, 0, b"FILE") {
+        return None;
+    }
+    let usa_offset = usize::from(u16_at(sector, 4)?);
+    let usa_count = usize::from(u16_at(sector, 6)?);
+    let size = usa_count.checked_sub(1)? * STRIDE;
+    let first_attribute = usize::from(u16_at(sector, 20)?);
+    let used = usize::try_from(u32_at(sector, 24)?).ok()?;
+    let allocated = usize::try_from(u32_at(sector, 28)?).ok()?;
+    let flags = u16_at(sector, 22)?;
+    let plausible = matches!(size, 1024 | 2048 | 4096)
+        && allocated == size
+        && usa_offset >= 0x30
+        && usa_offset % 2 == 0
+        && usa_offset + 2 * usa_count <= first_attribute
+        && first_attribute < used
+        && used <= size
+        && flags & !0x0F == 0;
+    plausible.then(|| MftRecord {
+        number: u64::from(u32_at(sector, 44).unwrap_or(0)),
+        size: size as u64,
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Header {
     pub sequence: u16,

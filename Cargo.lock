@@ -598,6 +598,7 @@ dependencies = [
  "datareco-fs",
  "datareco-io",
  "datareco-partitions",
+ "datareco-scan",
  "datareco-templates",
  "serde_json",
 ]
@@ -621,6 +622,7 @@ dependencies = [
  "datareco-fs",
  "datareco-io",
  "datareco-partitions",
+ "datareco-scan",
  "datareco-templates",
  "serde",
  "serde_json",
@@ -660,6 +662,15 @@ version = "0.1.0"
 [[package]]
 name = "datareco-scan"
 version = "0.1.0"
+dependencies = [
+ "datareco-fs",
+ "datareco-io",
+ "datareco-partitions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "datareco-templates"
