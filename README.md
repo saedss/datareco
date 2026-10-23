@@ -130,6 +130,24 @@ or an image file path.
 - **Copy a failing drive first.** Every read can be its last: copy it once, then
   scan and recover from the copy.
 
+## Download
+
+Releases are on the [Releases page](https://github.com/saedss/datareco/releases).
+Each one has, for 64-bit Windows 10 and 11:
+
+| File | What it is |
+|---|---|
+| `DataReco_x.y.z_x64-setup.exe` | Installer: adds DataReco to the Start menu, with an uninstaller |
+| `DataReco-x.y.z-portable.exe` | The desktop app as a single file: run it from anywhere, nothing installed |
+| `datareco-x.y.z.exe` | The command-line tool, a single file |
+
+The desktop app uses Microsoft's WebView2 runtime, which comes with Windows 11 and
+most up-to-date Windows 10 systems; the installer adds it when it's missing. Reading
+disks and volumes needs administrator rights; the app offers to restart as
+administrator when it needs them, and image files work without. The executables
+aren't signed yet, so Windows SmartScreen may ask you to confirm the first time
+("More info", then "Run anyway").
+
 ## Building
 
 DataReco targets Windows for now; Linux and macOS support comes in Phase 10.
@@ -154,8 +172,14 @@ Desktop app (from `apps/gui`):
 ```sh
 npm install
 npm run tauri dev      # run with live reload
-npm run tauri build    # release build: target/release/datareco-gui(.exe)
+npm run tauri build    # release build: the app and its installer
 ```
+
+`npm run tauri build` makes `target/release/datareco-gui.exe` (the app on its own)
+and `target/release/bundle/nsis/DataReco_<version>_x64-setup.exe` (the installer).
+Both executables, and `datareco.exe` from `cargo build --release`, include the C
+runtime, so they run without Visual C++ redistributables installed (see
+`.cargo/config.toml`). [RELEASING.md](docs/RELEASING.md) covers making a release.
 
 Plain `cargo build` at the repository root skips the desktop app, because it
 needs the frontend built first. Use the `npm run tauri` commands above for it.

@@ -1,0 +1,76 @@
+name: Release
+
+# Pushing a version tag (v0.1.0, ...) builds the Windows executables and
+# attaches them to a draft GitHub release, to look over and publish by hand.
+# Running it by hand (workflow_dispatch) only builds them, as an artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows executables
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: apps/gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the version
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          app_version=$(node -p "require('./apps/gui/package.json').version")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [[ "$app_version" != "$version" ]]; then
+            echo "::error::apps/gui/package.json says $app_version, Cargo.toml says $version"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml ($version)"
+            exit 1
+          fi
+
+      - name: Build the desktop app and its installer
+        working-directory: apps/gui
+        run: |
+          npm ci
+          npx tauri build
+
+      - name: Build the command-line tool
+        run: cargo build --release -p datareco-cli
+
+      - name: Collect the executables
+        shell: bash
+        run: |
+          mkdir release
+          cp "target/release/bundle/nsis/DataReco_${VERSION}_x64-setup.exe" release/
+          cp target/release/datareco-gui.exe "release/DataReco-${VERSION}-portable.exe"
+          cp target/release/datareco.exe "release/datareco-${VERSION}.exe"
+          (cd release && sha256sum -- *.exe > SHA256SUMS.txt)
+          ls -l release
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: datareco-${{ env.VERSION }}-windows
+          path: release
+
+      - name: Make a draft release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --draft --title "DataReco $VERSION" --generate-notes

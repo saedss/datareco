@@ -41,7 +41,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done (`ntfs-reformatted` by raw recovery, see the note) |
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
-| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | ext2/3/4, HFS+, APFS and btrfs done (APFS: see the note); ReFS left |
+| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | Done for ext2/3/4, HFS+, APFS and btrfs (APFS: see the note); ReFS deferred (see the note) |
 | 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
 | 10 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -88,6 +88,25 @@ test image (mkfs.btrfs, the kernel driver) checks real ones in CI. Not yet:
 compressed data (zlib, lzo, zstd), volumes spanning several disks, and deleted
 files (old tree nodes, as with APFS).
 
+Note on Phase 8, ReFS: deferred until there is a real ReFS volume to test
+against. Microsoft hasn't published the format, no sample images are public, and
+the public notes (libyal's libfsrefs documentation, and the ReFS 3.4 extension of
+The Sleuth Kit by Prade et al.) leave key parts uncertain: how 3.x translates
+addresses through its container table, and how file data runs are laid out. A
+reader built from those notes alone could pass its own tests and still fail on
+real disks. To pick it up again: a small ReFS volume (Windows Server, Windows Pro
+for Workstations, or a Dev Drive) with a few files, some deleted, saved as a raw
+image. ReFS volumes are recognized meanwhile.
+
+
+## Releases
+
+Each release is a version tag (`v0.1.0`, …) on `main`. Pushing it runs
+`.github/workflows/release.yml`, which builds the Windows executables and attaches
+them to a draft GitHub release to look over and publish; see
+[RELEASING.md](RELEASING.md). Before the first public release: choose a license
+(see the README), and consider code signing (Phase 10) so Windows doesn't warn
+about an unknown publisher.
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete
 NTFS files directly on disk; free and paid editions with activation.
