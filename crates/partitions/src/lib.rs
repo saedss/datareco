@@ -15,6 +15,7 @@ mod table;
 mod tests;
 
 pub use boot::{FileSystem, FsKind, identify};
+pub use crc32::crc32c;
 pub use scan::{Confidence, FoundPartition, Scan, ScanMode, ScanProgress, ScanState};
 pub use table::{
     Partition, PartitionKind, PartitionTable, Problem, Severity, TableKind, read_table,

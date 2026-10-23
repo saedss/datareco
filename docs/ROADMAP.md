@@ -41,7 +41,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done (`ntfs-reformatted` by raw recovery, see the note) |
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
-| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | ext2/3/4, HFS+ and APFS done (APFS: see the note) |
+| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | ext2/3/4, HFS+, APFS and btrfs done (APFS: see the note); ReFS left |
 | 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
 | 10 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -80,6 +80,13 @@ no generated test image; a small one made on a Mac would let the image tests cov
 it (see testdata/README.md). Not yet: encrypted volumes, snapshots, compressed
 files, and deleted files (which on APFS means searching for older copies of
 B-tree nodes).
+
+Note on Phase 8, btrfs: chunk mapping, the root tree, subvolumes, inline,
+regular and preallocated extents, holes, hard links, symbolic links and the
+superblock copy at 64 MiB are tested on volumes built in memory, and the `btrfs`
+test image (mkfs.btrfs, the kernel driver) checks real ones in CI. Not yet:
+compressed data (zlib, lzo, zstd), volumes spanning several disks, and deleted
+files (old tree nodes, as with APFS).
 
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete

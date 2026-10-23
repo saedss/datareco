@@ -46,7 +46,7 @@ fn volumes(dir: &Path, images: &[Value]) -> Vec<(String, Box<dyn FileSystem>, Va
             let kind = volume["fs"].as_str().unwrap();
             if !matches!(
                 kind,
-                "fat12" | "fat16" | "fat32" | "exfat" | "ntfs" | "ext4" | "hfsplus"
+                "fat12" | "fat16" | "fat32" | "exfat" | "ntfs" | "ext4" | "hfsplus" | "btrfs"
             ) {
                 continue;
             }
@@ -58,7 +58,7 @@ fn volumes(dir: &Path, images: &[Value]) -> Vec<(String, Box<dyn FileSystem>, Va
     }
     assert!(
         !found.is_empty(),
-        "no FAT, exFAT, NTFS, ext4 or HFS+ volumes in the test images"
+        "no FAT, exFAT, NTFS, ext4, HFS+ or btrfs volumes in the test images"
     );
     found
 }
@@ -104,7 +104,7 @@ fn live_files_read_back_with_the_right_hash() {
     };
     for (name, fs, volume) in volumes(&dir, &images) {
         let kind = volume["fs"].as_str().unwrap();
-        if matches!(kind, "ntfs" | "ext4" | "hfsplus") || kind.starts_with("fat") {
+        if matches!(kind, "ntfs" | "ext4" | "hfsplus" | "btrfs") || kind.starts_with("fat") {
             assert_eq!(
                 fs.info().label.as_deref(),
                 volume["label"].as_str(),
@@ -126,6 +126,11 @@ fn live_files_read_back_with_the_right_hash() {
             volume["fs"] == "hfsplus",
             "{name}"
         );
+        assert_eq!(
+            fs.info().kind == FsKind::Btrfs,
+            volume["fs"] == "btrfs",
+            "{name}"
+        );
         for file in volume["files"]
             .as_array()
             .unwrap()
@@ -140,7 +145,10 @@ fn live_files_read_back_with_the_right_hash() {
             let data = read_to_end(fs.as_ref(), &entry.id, None, u64::MAX)
                 .unwrap_or_else(|e| panic!("{name}: reading {path}: {e}"));
             assert_eq!(sha256(&data), file["sha256"], "{name}: {path}");
-            if matches!(volume["fs"].as_str(), Some("ntfs" | "ext4" | "hfsplus")) {
+            if matches!(
+                volume["fs"].as_str(),
+                Some("ntfs" | "ext4" | "hfsplus" | "btrfs")
+            ) {
                 assert_eq!(entry.modified, file["mtime"].as_i64(), "{name}: {path}");
             }
         }
@@ -183,9 +191,10 @@ fn deleted_files_are_listed() {
     };
     for (name, fs, volume) in volumes(&dir, &images) {
         let ext = volume["fs"] == "ext4";
-        // HFS+ drivers usually overwrite a deleted file's catalog record, so
-        // only what is found is checked.
-        let hfs = volume["fs"] == "hfsplus";
+        // HFS+ drivers usually overwrite a deleted file's catalog record, and
+        // btrfs deleted files aren't looked for yet: only what is found is
+        // checked.
+        let hfs = volume["fs"] == "hfsplus" || volume["fs"] == "btrfs";
         let mut recovered = 0;
         let mut deleted = 0;
         for file in volume["files"]

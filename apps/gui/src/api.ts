@@ -137,6 +137,7 @@ export type FsKind =
   | "refs"
   | "hfsplus"
   | "apfs"
+  | "btrfs"
   /** Files found by their contents (raw recovery). */
   | "raw";
 
@@ -170,6 +171,7 @@ export type EntryId =
   | { kind: "inode"; number: number; deleted: boolean }
   | { kind: "catalog"; id: number; deleted: boolean }
   | { kind: "apfs"; volume: number; id: number }
+  | { kind: "btrfs"; tree: number; inode: number }
   | { kind: "orphans" }
   | { kind: "lostFolder"; number: number }
   | { kind: "span"; offset: number; length: number }
