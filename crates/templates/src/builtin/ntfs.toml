@@ -1,0 +1,678 @@
+# NTFS. Layout follows the Linux-NTFS project's documentation of the on-disk format.
+
+[[template]]
+id = "ntfs_boot_sector"
+name = "NTFS boot sector"
+group = "NTFS"
+description = "First sector of an NTFS volume. A backup copy is in the volume's last sector."
+size = 512
+signature = [{ offset = 3, ascii = "NTFS    " }]
+
+[[template.field]]
+name = "Jump instruction"
+offset = 0
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "OEM ID"
+offset = 3
+type = "ascii"
+length = 8
+
+[[template.field]]
+name = "Bytes per sector"
+offset = 11
+type = "u16"
+
+[[template.field]]
+name = "Sectors per cluster"
+offset = 13
+type = "u8"
+description = "Values above 128 mean 2^(256 - value) sectors."
+
+[[template.field]]
+name = "Reserved sectors"
+offset = 14
+type = "u16"
+
+[[template.field]]
+name = "Always zero"
+offset = 16
+type = "bytes"
+length = 5
+
+[[template.field]]
+name = "Media descriptor"
+offset = 21
+type = "u8"
+format = "hex"
+values = { "0xF8" = "fixed disk" }
+
+[[template.field]]
+name = "Always zero (2)"
+offset = 22
+type = "u16"
+
+[[template.field]]
+name = "Sectors per track"
+offset = 24
+type = "u16"
+
+[[template.field]]
+name = "Number of heads"
+offset = 26
+type = "u16"
+
+[[template.field]]
+name = "Hidden sectors"
+offset = 28
+type = "u32"
+description = "Sectors before this volume on the disk (its partition's start)."
+
+[[template.field]]
+name = "Unused"
+offset = 32
+type = "bytes"
+length = 8
+
+[[template.field]]
+name = "Total sectors"
+offset = 40
+type = "u64"
+description = "Sectors in the volume, not counting the backup boot sector at its end."
+
+[[template.field]]
+name = "MFT cluster"
+offset = 48
+type = "u64"
+description = "Where the Master File Table starts."
+
+[[template.field]]
+name = "MFT mirror cluster"
+offset = 56
+type = "u64"
+description = "Where the copy of the MFT's first records ($MFTMirr) is."
+
+[[template.field]]
+name = "Clusters per MFT record"
+offset = 64
+type = "i8"
+description = "Negative n means 2^-n bytes, e.g. -10 = 1024 bytes."
+values = { "-10" = "1024 bytes", "-12" = "4096 bytes" }
+
+[[template.field]]
+name = "Unused (2)"
+offset = 65
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "Clusters per index record"
+offset = 68
+type = "i8"
+description = "Negative n means 2^-n bytes, e.g. -12 = 4096 bytes."
+values = { "-12" = "4096 bytes" }
+
+[[template.field]]
+name = "Unused (3)"
+offset = 69
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "Volume serial number"
+offset = 72
+type = "u64"
+format = "hex"
+
+[[template.field]]
+name = "Checksum"
+offset = 80
+type = "u32"
+format = "hex"
+
+[[template.field]]
+name = "Boot code"
+offset = 84
+type = "bytes"
+length = 426
+
+[[template.field]]
+name = "Boot signature"
+offset = 510
+type = "u16"
+format = "hex"
+values = { "0xAA55" = "valid (55 AA)" }
+
+
+[[template]]
+id = "ntfs_mft_record"
+name = "NTFS MFT file record"
+group = "NTFS"
+description = "One record of the Master File Table, shown as stored: before the update-sequence fixup, the last 2 bytes of each 512-byte sector hold the update sequence number instead of their real value."
+size = 1024
+signature = [{ offset = 0, ascii = "FILE" }]
+
+[[template.field]]
+name = "Signature"
+offset = 0
+type = "ascii"
+length = 4
+description = "FILE, or BAAD if Windows found the record damaged."
+
+[[template.field]]
+name = "Update sequence offset"
+offset = 4
+type = "u16"
+
+[[template.field]]
+name = "Update sequence size (words)"
+offset = 6
+type = "u16"
+
+[[template.field]]
+name = "$LogFile sequence number"
+offset = 8
+type = "u64"
+
+[[template.field]]
+name = "Sequence number"
+offset = 16
+type = "u16"
+description = "Goes up each time the record is reused."
+
+[[template.field]]
+name = "Hard link count"
+offset = 18
+type = "u16"
+
+[[template.field]]
+name = "First attribute offset"
+id = "first_attribute"
+offset = 20
+type = "u16"
+
+[[template.field]]
+name = "Flags"
+offset = 22
+type = "u16"
+format = "hex"
+values = { "0x0" = "not in use (deleted or free)" }
+flags = { "0x1" = "in use", "0x2" = "directory", "0x4" = "extension", "0x8" = "special index" }
+
+[[template.field]]
+name = "Used size"
+offset = 24
+type = "u32"
+
+[[template.field]]
+name = "Allocated size"
+offset = 28
+type = "u32"
+
+[[template.field]]
+name = "Base record reference"
+offset = 32
+type = "u64"
+format = "hex"
+description = "0 for a base record; otherwise the base record this one extends."
+
+[[template.field]]
+name = "Next attribute ID"
+offset = 40
+type = "u16"
+
+[[template.field]]
+name = "Record number"
+offset = 44
+type = "u32"
+description = "This record's number in the MFT (Windows XP and later)."
+
+[[template.field]]
+name = "Attributes"
+offset = "first_attribute"
+type = "chain"
+template = "ntfs_attribute"
+item_length = "length"
+until = "type == 0xFFFFFFFF"
+max = 64
+
+
+[[template]]
+id = "ntfs_attribute"
+name = "NTFS attribute"
+group = "NTFS"
+description = "One attribute of an MFT record: a common header, then resident or non-resident details."
+
+[[template.field]]
+name = "Type"
+id = "type"
+offset = 0
+type = "u32"
+hidden = true
+
+[[template.field]]
+name = "Length"
+id = "length"
+offset = 4
+type = "u32"
+hidden = true
+
+[[template.field]]
+name = "Non-resident"
+id = "non_resident"
+offset = 8
+type = "u8"
+hidden = true
+
+[[template.field]]
+name = "Attribute"
+offset = 0
+type = "struct"
+inline = true
+select = { value = "non_resident", cases = { "0" = "ntfs_resident_attribute", "1" = "ntfs_nonresident_attribute" } }
+
+
+[[template]]
+id = "ntfs_resident_attribute"
+name = "NTFS resident attribute"
+group = "NTFS"
+list = false
+summary = "{type}"
+
+[[template.field]]
+name = "Type"
+id = "type"
+offset = 0
+type = "u32"
+format = "hex"
+[template.field.values]
+"0x10" = "$STANDARD_INFORMATION"
+"0x20" = "$ATTRIBUTE_LIST"
+"0x30" = "$FILE_NAME"
+"0x40" = "$OBJECT_ID"
+"0x50" = "$SECURITY_DESCRIPTOR"
+"0x60" = "$VOLUME_NAME"
+"0x70" = "$VOLUME_INFORMATION"
+"0x80" = "$DATA"
+"0x90" = "$INDEX_ROOT"
+"0xA0" = "$INDEX_ALLOCATION"
+"0xB0" = "$BITMAP"
+"0xC0" = "$REPARSE_POINT"
+"0xD0" = "$EA_INFORMATION"
+"0xE0" = "$EA"
+"0x100" = "$LOGGED_UTILITY_STREAM"
+"0xFFFFFFFF" = "end of attributes"
+
+[[template.field]]
+name = "Length"
+offset = 4
+type = "u32"
+
+[[template.field]]
+name = "Non-resident"
+offset = 8
+type = "u8"
+values = { "0" = "no: the value is inside the record" }
+
+[[template.field]]
+name = "Name length (characters)"
+id = "name_length"
+offset = 9
+type = "u8"
+
+[[template.field]]
+name = "Name offset"
+id = "name_offset"
+offset = 10
+type = "u16"
+
+[[template.field]]
+name = "Flags"
+offset = 12
+type = "u16"
+format = "hex"
+flags = { "0x1" = "compressed", "0x4000" = "encrypted", "0x8000" = "sparse" }
+
+[[template.field]]
+name = "Attribute ID"
+offset = 14
+type = "u16"
+
+[[template.field]]
+name = "Value length"
+id = "value_length"
+offset = 16
+type = "u32"
+
+[[template.field]]
+name = "Value offset"
+id = "value_offset"
+offset = 20
+type = "u16"
+
+[[template.field]]
+name = "Indexed"
+offset = 22
+type = "u8"
+
+[[template.field]]
+name = "Padding"
+offset = 23
+type = "u8"
+
+[[template.field]]
+name = "Name"
+offset = "name_offset"
+type = "utf16"
+length = "name_length * 2"
+description = "Empty for unnamed attributes; alternate data streams have a name."
+
+[[template.field]]
+name = "Value bytes"
+offset = "value_offset"
+type = "bytes"
+length = "value_length"
+
+[[template.field]]
+name = "Value"
+offset = "value_offset"
+type = "struct"
+select = { value = "type", cases = { "0x10" = "ntfs_standard_information", "0x30" = "ntfs_file_name" } }
+
+
+[[template]]
+id = "ntfs_nonresident_attribute"
+name = "NTFS non-resident attribute"
+group = "NTFS"
+list = false
+summary = "{type}"
+
+[[template.field]]
+name = "Type"
+id = "type"
+offset = 0
+type = "u32"
+format = "hex"
+[template.field.values]
+"0x10" = "$STANDARD_INFORMATION"
+"0x20" = "$ATTRIBUTE_LIST"
+"0x30" = "$FILE_NAME"
+"0x40" = "$OBJECT_ID"
+"0x50" = "$SECURITY_DESCRIPTOR"
+"0x60" = "$VOLUME_NAME"
+"0x70" = "$VOLUME_INFORMATION"
+"0x80" = "$DATA"
+"0x90" = "$INDEX_ROOT"
+"0xA0" = "$INDEX_ALLOCATION"
+"0xB0" = "$BITMAP"
+"0xC0" = "$REPARSE_POINT"
+"0xD0" = "$EA_INFORMATION"
+"0xE0" = "$EA"
+"0x100" = "$LOGGED_UTILITY_STREAM"
+
+[[template.field]]
+name = "Length"
+id = "length"
+offset = 4
+type = "u32"
+
+[[template.field]]
+name = "Non-resident"
+offset = 8
+type = "u8"
+values = { "1" = "yes: the value is in clusters listed by the data runs" }
+
+[[template.field]]
+name = "Name length (characters)"
+id = "name_length"
+offset = 9
+type = "u8"
+
+[[template.field]]
+name = "Name offset"
+id = "name_offset"
+offset = 10
+type = "u16"
+
+[[template.field]]
+name = "Flags"
+offset = 12
+type = "u16"
+format = "hex"
+flags = { "0x1" = "compressed", "0x4000" = "encrypted", "0x8000" = "sparse" }
+
+[[template.field]]
+name = "Attribute ID"
+offset = 14
+type = "u16"
+
+[[template.field]]
+name = "First VCN"
+offset = 16
+type = "u64"
+
+[[template.field]]
+name = "Last VCN"
+offset = 24
+type = "u64"
+
+[[template.field]]
+name = "Data runs offset"
+id = "runs_offset"
+offset = 32
+type = "u16"
+
+[[template.field]]
+name = "Compression unit (power of 2 clusters)"
+offset = 34
+type = "u16"
+
+[[template.field]]
+name = "Padding"
+offset = 36
+type = "u32"
+
+[[template.field]]
+name = "Allocated size"
+offset = 40
+type = "u64"
+
+[[template.field]]
+name = "Real size"
+offset = 48
+type = "u64"
+
+[[template.field]]
+name = "Initialized size"
+offset = 56
+type = "u64"
+
+[[template.field]]
+name = "Name"
+offset = "name_offset"
+type = "utf16"
+length = "name_length * 2"
+
+[[template.field]]
+name = "Data runs"
+offset = "runs_offset"
+type = "bytes"
+length = "length - runs_offset"
+description = "Where the value's clusters are, as a compact list of (length, offset) runs."
+
+
+[[template]]
+id = "ntfs_standard_information"
+name = "NTFS $STANDARD_INFORMATION"
+group = "NTFS"
+description = "Timestamps and Windows file attributes. The last 24 bytes exist on NTFS 3.0 and later."
+size = 72
+
+[[template.field]]
+name = "Created"
+offset = 0
+type = "filetime"
+
+[[template.field]]
+name = "Modified"
+offset = 8
+type = "filetime"
+
+[[template.field]]
+name = "MFT record modified"
+offset = 16
+type = "filetime"
+
+[[template.field]]
+name = "Accessed"
+offset = 24
+type = "filetime"
+
+[[template.field]]
+name = "File attributes"
+offset = 32
+type = "u32"
+format = "hex"
+[template.field.flags]
+"0x1" = "read-only"
+"0x2" = "hidden"
+"0x4" = "system"
+"0x20" = "archive"
+"0x40" = "device"
+"0x80" = "normal"
+"0x100" = "temporary"
+"0x200" = "sparse"
+"0x400" = "reparse point"
+"0x800" = "compressed"
+"0x1000" = "offline"
+"0x2000" = "not content indexed"
+"0x4000" = "encrypted"
+
+[[template.field]]
+name = "Maximum versions"
+offset = 36
+type = "u32"
+
+[[template.field]]
+name = "Version"
+offset = 40
+type = "u32"
+
+[[template.field]]
+name = "Class ID"
+offset = 44
+type = "u32"
+
+[[template.field]]
+name = "Owner ID"
+offset = 48
+type = "u32"
+
+[[template.field]]
+name = "Security ID"
+offset = 52
+type = "u32"
+
+[[template.field]]
+name = "Quota charged"
+offset = 56
+type = "u64"
+
+[[template.field]]
+name = "Update sequence number (USN)"
+offset = 64
+type = "u64"
+
+
+[[template]]
+id = "ntfs_file_name"
+name = "NTFS $FILE_NAME"
+group = "NTFS"
+description = "A name of the file and the directory it's in. Files often have two: a long (Win32) name and a short (DOS) one."
+summary = "{name}"
+
+[[template.field]]
+name = "Parent directory record"
+offset = 0
+type = "u48"
+description = "MFT record number of the directory containing this name."
+
+[[template.field]]
+name = "Parent directory sequence number"
+offset = 6
+type = "u16"
+
+[[template.field]]
+name = "Created"
+offset = 8
+type = "filetime"
+
+[[template.field]]
+name = "Modified"
+offset = 16
+type = "filetime"
+
+[[template.field]]
+name = "MFT record modified"
+offset = 24
+type = "filetime"
+
+[[template.field]]
+name = "Accessed"
+offset = 32
+type = "filetime"
+
+[[template.field]]
+name = "Allocated size"
+offset = 40
+type = "u64"
+
+[[template.field]]
+name = "Real size"
+offset = 48
+type = "u64"
+description = "Often out of date: Windows only updates it when the name changes."
+
+[[template.field]]
+name = "Flags"
+offset = 56
+type = "u32"
+format = "hex"
+[template.field.flags]
+"0x1" = "read-only"
+"0x2" = "hidden"
+"0x4" = "system"
+"0x20" = "archive"
+"0x200" = "sparse"
+"0x400" = "reparse point"
+"0x800" = "compressed"
+"0x4000" = "encrypted"
+"0x10000000" = "directory"
+"0x20000000" = "index view"
+
+[[template.field]]
+name = "Reparse value"
+offset = 60
+type = "u32"
+format = "hex"
+
+[[template.field]]
+name = "Name length (characters)"
+id = "name_length"
+offset = 64
+type = "u8"
+
+[[template.field]]
+name = "Namespace"
+offset = 65
+type = "u8"
+values = { "0" = "POSIX", "1" = "Win32 (long name)", "2" = "DOS (short name)", "3" = "Win32 and DOS" }
+
+[[template.field]]
+name = "Name"
+id = "name"
+offset = 66
+type = "utf16"
+length = "name_length * 2"

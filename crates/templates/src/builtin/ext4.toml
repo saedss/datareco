@@ -1,0 +1,279 @@
+# ext2, ext3 and ext4. Layout: https://www.kernel.org/doc/html/latest/filesystems/ext4/
+
+[[template]]
+id = "ext4_superblock"
+name = "ext2/3/4 superblock"
+group = "ext"
+description = "Starts 1024 bytes into an ext2, ext3 or ext4 volume. Backup copies sit at the start of some block groups."
+size = 1024
+signature = [{ offset = 56, hex = "53 EF" }]
+
+[[template.field]]
+name = "Inode count"
+offset = 0
+type = "u32"
+
+[[template.field]]
+name = "Block count (low 32 bits)"
+offset = 4
+type = "u32"
+
+[[template.field]]
+name = "Reserved block count (low 32 bits)"
+offset = 8
+type = "u32"
+
+[[template.field]]
+name = "Free block count (low 32 bits)"
+offset = 12
+type = "u32"
+
+[[template.field]]
+name = "Free inode count"
+offset = 16
+type = "u32"
+
+[[template.field]]
+name = "First data block"
+offset = 20
+type = "u32"
+description = "1 on volumes with 1024-byte blocks, otherwise 0."
+
+[[template.field]]
+name = "Block size"
+offset = 24
+type = "u32"
+description = "Block size is 1024 << this value."
+values = { "0" = "1024 bytes", "1" = "2048 bytes", "2" = "4096 bytes", "3" = "8192 bytes", "4" = "16384 bytes", "5" = "32768 bytes", "6" = "65536 bytes" }
+
+[[template.field]]
+name = "Cluster size"
+offset = 28
+type = "u32"
+description = "1024 << this value; the same as the block size unless bigalloc is on."
+
+[[template.field]]
+name = "Blocks per group"
+offset = 32
+type = "u32"
+
+[[template.field]]
+name = "Clusters per group"
+offset = 36
+type = "u32"
+
+[[template.field]]
+name = "Inodes per group"
+offset = 40
+type = "u32"
+
+[[template.field]]
+name = "Last mounted"
+offset = 44
+type = "unix_time"
+
+[[template.field]]
+name = "Last written"
+offset = 48
+type = "unix_time"
+
+[[template.field]]
+name = "Mount count"
+offset = 52
+type = "u16"
+
+[[template.field]]
+name = "Mounts before a check"
+offset = 54
+type = "i16"
+values = { "-1" = "no limit" }
+
+[[template.field]]
+name = "Magic"
+offset = 56
+type = "u16"
+format = "hex"
+values = { "0xEF53" = "ext2/3/4" }
+
+[[template.field]]
+name = "State"
+offset = 58
+type = "u16"
+format = "hex"
+flags = { "0x1" = "cleanly unmounted", "0x2" = "errors detected", "0x4" = "orphans being recovered" }
+
+[[template.field]]
+name = "On errors"
+offset = 60
+type = "u16"
+values = { "1" = "continue", "2" = "remount read-only", "3" = "panic" }
+
+[[template.field]]
+name = "Minor revision"
+offset = 62
+type = "u16"
+
+[[template.field]]
+name = "Last checked"
+offset = 64
+type = "unix_time"
+
+[[template.field]]
+name = "Check interval (seconds)"
+offset = 68
+type = "u32"
+
+[[template.field]]
+name = "Creator OS"
+offset = 72
+type = "u32"
+values = { "0" = "Linux", "1" = "Hurd", "2" = "Masix", "3" = "FreeBSD", "4" = "Lites" }
+
+[[template.field]]
+name = "Revision"
+offset = 76
+type = "u32"
+values = { "0" = "original (fixed inode size)", "1" = "dynamic" }
+
+[[template.field]]
+name = "Reserved blocks user ID"
+offset = 80
+type = "u16"
+
+[[template.field]]
+name = "Reserved blocks group ID"
+offset = 82
+type = "u16"
+
+[[template.field]]
+name = "First regular inode"
+offset = 84
+type = "u32"
+
+[[template.field]]
+name = "Inode size"
+offset = 88
+type = "u16"
+
+[[template.field]]
+name = "Block group of this superblock"
+offset = 90
+type = "u16"
+
+[[template.field]]
+name = "Compatible features"
+offset = 92
+type = "u32"
+format = "hex"
+[template.field.flags]
+"0x1" = "dir_prealloc"
+"0x2" = "imagic_inodes"
+"0x4" = "has_journal"
+"0x8" = "ext_attr"
+"0x10" = "resize_inode"
+"0x20" = "dir_index"
+"0x200" = "sparse_super2"
+"0x400" = "fast_commit"
+"0x1000" = "orphan_file"
+
+[[template.field]]
+name = "Incompatible features"
+offset = 96
+type = "u32"
+format = "hex"
+[template.field.flags]
+"0x1" = "compression"
+"0x2" = "filetype"
+"0x4" = "needs journal recovery"
+"0x8" = "journal_dev"
+"0x10" = "meta_bg"
+"0x40" = "extents"
+"0x80" = "64bit"
+"0x100" = "mmp"
+"0x200" = "flex_bg"
+"0x400" = "ea_inode"
+"0x1000" = "dirdata"
+"0x2000" = "csum_seed"
+"0x4000" = "large_dir"
+"0x8000" = "inline_data"
+"0x10000" = "encrypt"
+"0x20000" = "casefold"
+
+[[template.field]]
+name = "Read-only compatible features"
+offset = 100
+type = "u32"
+format = "hex"
+[template.field.flags]
+"0x1" = "sparse_super"
+"0x2" = "large_file"
+"0x8" = "huge_file"
+"0x10" = "gdt_csum"
+"0x20" = "dir_nlink"
+"0x40" = "extra_isize"
+"0x100" = "quota"
+"0x200" = "bigalloc"
+"0x400" = "metadata_csum"
+"0x1000" = "read-only"
+"0x2000" = "project"
+"0x8000" = "verity"
+"0x10000" = "orphan_present"
+
+[[template.field]]
+name = "UUID"
+offset = 104
+type = "uuid"
+
+[[template.field]]
+name = "Volume name"
+offset = 120
+type = "ascii"
+length = 16
+
+[[template.field]]
+name = "Last mounted on"
+offset = 136
+type = "ascii"
+length = 64
+
+[[template.field]]
+name = "Reserved GDT blocks"
+offset = 206
+type = "u16"
+
+[[template.field]]
+name = "Journal UUID"
+offset = 208
+type = "uuid"
+
+[[template.field]]
+name = "Journal inode"
+offset = 224
+type = "u32"
+
+[[template.field]]
+name = "Descriptor size"
+offset = 254
+type = "u16"
+
+[[template.field]]
+name = "Created"
+offset = 264
+type = "unix_time"
+
+[[template.field]]
+name = "Block count (high 32 bits)"
+offset = 336
+type = "u32"
+
+[[template.field]]
+name = "Checksum type"
+offset = 373
+type = "u8"
+values = { "0" = "none", "1" = "crc32c" }
+
+[[template.field]]
+name = "Checksum"
+offset = 1020
+type = "u32"
+format = "hex"

@@ -12,6 +12,7 @@ tauri-build.workspace = true
 
 [dependencies]
 datareco-io.workspace = true
+datareco-templates.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

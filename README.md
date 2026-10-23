@@ -3,9 +3,10 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 1).** DataReco can list your disks and volumes
-> and show any sector of a disk, volume or image file. The disk editor and recovery
-> come next; see the [roadmap](docs/ROADMAP.md).
+> **Status: early development (Phase 2).** DataReco lists your disks and volumes and
+> has a read-only disk editor: browse any disk, volume or image as hex, search it,
+> bookmark places, and decode structures such as partition tables, boot sectors and
+> MFT records. Partition recovery comes next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -13,17 +14,30 @@ DataReco only reads. Windows lets programs read disks and volumes directly only
 when they run as administrator; image files work without. The desktop app offers
 **Restart as administrator** when it needs to.
 
-Desktop app: pick a disk, volume or image file on the left to see its sectors as
-hex and text. Page Up and Page Down move between sectors. `datareco-gui --open disk0`
-starts on a given source.
+**Desktop app:** pick a disk, volume or image file on the left.
 
-Command line:
+- Scroll through the whole disk; arrow keys, Page Up/Down and Ctrl+Home/End move
+  the cursor. Sector numbers are shown on the left.
+- **Go to** a sector or byte offset (decimal, or hex starting with `0x`).
+- **Find** text, UTF-16 text or hex bytes from the cursor onwards.
+- **Structure** suggests what starts at the cursor's sector (MBR, GPT, boot
+  sectors, MFT records, …) and decodes it field by field; click a field to see
+  its bytes. You can [write your own templates](docs/TEMPLATES.md).
+- **Bookmarks** remember places, separately for each disk and image.
+
+`datareco-gui --open disk0` starts on a given source.
+
+**Command line:**
 
 ```sh
-datareco disks                       # list physical disks and volumes
-datareco read disk0                  # sector 0 of the first disk (as administrator)
-datareco read C: --sector 1          # a sector of a volume
+datareco disks                         # list physical disks and volumes
+datareco read disk0                    # sector 0 of the first disk (as administrator)
 datareco read backup.img -s 2048 -n 2  # two sectors of an image file
+datareco decode disk0 auto             # recognize and decode sector 0
+datareco decode C: ntfs_mft_record --offset 0xC0000000
+datareco templates                     # the structures decode understands
+datareco find backup.img --text "IMPORTANT" --ignore-case
+datareco find disk1 --hex "55 AA" -n 10
 ```
 
 A source is `diskN`, a drive letter like `C:`, a volume path (`\\?\Volume{…}`),

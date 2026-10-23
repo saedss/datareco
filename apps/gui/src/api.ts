@@ -46,10 +46,39 @@ export type SourceInfo = {
   sectorCount: number;
 };
 
-export type SectorData = { lba: number; data: number[]; unreadable: number[] };
+export type ByteData = { offset: number; data: number[]; unreadable: number[] };
+
+export type SearchProgress =
+  | { status: "found"; offset: number }
+  | { status: "continue"; next: number }
+  | { status: "notFound" };
+
+export type TemplateSummary = {
+  id: string;
+  name: string;
+  description: string;
+  group: string;
+  size: number | null;
+  extent: number;
+  source: string;
+};
+
+export type TemplateList = { templates: TemplateSummary[]; problems: string[]; folder: string };
+
+/** A decoded field or structure (see `Node` in crates/templates). */
+export type TemplateNode = {
+  name: string;
+  offset: number;
+  size: number;
+  value: string;
+  note: string | null;
+  description: string | null;
+  problem: boolean;
+  children: TemplateNode[];
+};
 
 export type CommandError = {
-  kind: "access_denied" | "not_found" | "out_of_range" | "unsupported" | "io";
+  kind: "access_denied" | "not_found" | "out_of_range" | "unsupported" | "io" | "template";
   message: string;
 };
 
@@ -57,8 +86,18 @@ export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   listDevices: () => invoke<DeviceList>("list_devices"),
   openSource: (id: string) => invoke<SourceInfo>("open_source", { id }),
-  readSectors: (id: string, lba: number, count: number) =>
-    invoke<SectorData>("read_sectors", { id, lba, count }),
+  readBytes: (id: string, offset: number, length: number) =>
+    invoke<ByteData>("read_bytes", { id, offset, length }),
+  /** Searches one step from `from`; call again with `next` to go on. */
+  find: (id: string, pattern: number[], from: number, ignoreCase: boolean) =>
+    invoke<SearchProgress>("find", { id, pattern, from, ignoreCase }),
+  listTemplates: () => invoke<TemplateList>("list_templates"),
+  reloadTemplates: () => invoke<TemplateList>("reload_templates"),
+  detectTemplates: (id: string, offset: number) =>
+    invoke<TemplateSummary[]>("detect_templates", { id, offset }),
+  decodeTemplate: (id: string, template: string, offset: number) =>
+    invoke<TemplateNode>("decode_template", { id, template, offset }),
+  openTemplatesFolder: () => invoke<void>("open_templates_folder"),
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),
 };

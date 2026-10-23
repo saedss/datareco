@@ -1,0 +1,558 @@
+# FAT12, FAT16 and FAT32. Layout: Microsoft "FAT: General Overview of On-Disk Format".
+
+[[template]]
+id = "fat_boot_sector"
+name = "FAT12/FAT16 boot sector"
+group = "FAT"
+description = "First sector of a FAT12 or FAT16 volume: the BIOS parameter block (BPB) describes the volume's layout."
+size = 512
+signature = [{ offset = 54, ascii = "FAT1" }, { offset = 510, hex = "55 AA" }]
+
+[[template.field]]
+name = "Jump instruction"
+offset = 0
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "OEM name"
+offset = 3
+type = "ascii"
+length = 8
+
+[[template.field]]
+name = "Bytes per sector"
+offset = 11
+type = "u16"
+
+[[template.field]]
+name = "Sectors per cluster"
+offset = 13
+type = "u8"
+
+[[template.field]]
+name = "Reserved sectors"
+offset = 14
+type = "u16"
+description = "Sectors before the first FAT, including this one."
+
+[[template.field]]
+name = "Number of FATs"
+offset = 16
+type = "u8"
+
+[[template.field]]
+name = "Root directory entries"
+offset = 17
+type = "u16"
+
+[[template.field]]
+name = "Total sectors (16-bit)"
+offset = 19
+type = "u16"
+description = "0 when the count is in the 32-bit field."
+
+[[template.field]]
+name = "Media descriptor"
+offset = 21
+type = "u8"
+format = "hex"
+values = { "0xF0" = "removable media", "0xF8" = "fixed disk" }
+
+[[template.field]]
+name = "Sectors per FAT"
+offset = 22
+type = "u16"
+
+[[template.field]]
+name = "Sectors per track"
+offset = 24
+type = "u16"
+
+[[template.field]]
+name = "Number of heads"
+offset = 26
+type = "u16"
+
+[[template.field]]
+name = "Hidden sectors"
+offset = 28
+type = "u32"
+description = "Sectors before this volume on the disk (its partition's start)."
+
+[[template.field]]
+name = "Total sectors (32-bit)"
+offset = 32
+type = "u32"
+
+[[template.field]]
+name = "Drive number"
+offset = 36
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Reserved"
+offset = 37
+type = "u8"
+
+[[template.field]]
+name = "Extended boot signature"
+offset = 38
+type = "u8"
+format = "hex"
+values = { "0x29" = "serial number, label and type follow" }
+
+[[template.field]]
+name = "Volume serial number"
+offset = 39
+type = "u32"
+format = "hex"
+
+[[template.field]]
+name = "Volume label"
+offset = 43
+type = "ascii"
+length = 11
+
+[[template.field]]
+name = "File system type"
+offset = 54
+type = "ascii"
+length = 8
+
+[[template.field]]
+name = "Boot code"
+offset = 62
+type = "bytes"
+length = 448
+
+[[template.field]]
+name = "Boot signature"
+offset = 510
+type = "u16"
+format = "hex"
+values = { "0xAA55" = "valid (55 AA)" }
+
+
+[[template]]
+id = "fat32_boot_sector"
+name = "FAT32 boot sector"
+group = "FAT"
+description = "First sector of a FAT32 volume. A backup copy is usually at sector 6."
+size = 512
+signature = [{ offset = 82, ascii = "FAT32" }, { offset = 510, hex = "55 AA" }]
+
+[[template.field]]
+name = "Jump instruction"
+offset = 0
+type = "bytes"
+length = 3
+
+[[template.field]]
+name = "OEM name"
+offset = 3
+type = "ascii"
+length = 8
+
+[[template.field]]
+name = "Bytes per sector"
+offset = 11
+type = "u16"
+
+[[template.field]]
+name = "Sectors per cluster"
+offset = 13
+type = "u8"
+
+[[template.field]]
+name = "Reserved sectors"
+offset = 14
+type = "u16"
+description = "Sectors before the first FAT, including this one."
+
+[[template.field]]
+name = "Number of FATs"
+offset = 16
+type = "u8"
+
+[[template.field]]
+name = "Root directory entries"
+offset = 17
+type = "u16"
+description = "Always 0 on FAT32: the root directory is a cluster chain."
+
+[[template.field]]
+name = "Total sectors (16-bit)"
+offset = 19
+type = "u16"
+
+[[template.field]]
+name = "Media descriptor"
+offset = 21
+type = "u8"
+format = "hex"
+values = { "0xF0" = "removable media", "0xF8" = "fixed disk" }
+
+[[template.field]]
+name = "Sectors per FAT (16-bit)"
+offset = 22
+type = "u16"
+description = "Always 0 on FAT32; see the 32-bit field."
+
+[[template.field]]
+name = "Sectors per track"
+offset = 24
+type = "u16"
+
+[[template.field]]
+name = "Number of heads"
+offset = 26
+type = "u16"
+
+[[template.field]]
+name = "Hidden sectors"
+offset = 28
+type = "u32"
+description = "Sectors before this volume on the disk (its partition's start)."
+
+[[template.field]]
+name = "Total sectors"
+offset = 32
+type = "u32"
+
+[[template.field]]
+name = "Sectors per FAT"
+offset = 36
+type = "u32"
+
+[[template.field]]
+name = "Flags"
+offset = 40
+type = "u16"
+format = "hex"
+flags = { "0x80" = "only one FAT is active" }
+
+[[template.field]]
+name = "Version"
+offset = 42
+type = "u16"
+format = "hex"
+
+[[template.field]]
+name = "Root directory cluster"
+offset = 44
+type = "u32"
+
+[[template.field]]
+name = "FSInfo sector"
+offset = 48
+type = "u16"
+
+[[template.field]]
+name = "Backup boot sector"
+offset = 50
+type = "u16"
+
+[[template.field]]
+name = "Reserved"
+offset = 52
+type = "bytes"
+length = 12
+
+[[template.field]]
+name = "Drive number"
+offset = 64
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Reserved (2)"
+offset = 65
+type = "u8"
+
+[[template.field]]
+name = "Extended boot signature"
+offset = 66
+type = "u8"
+format = "hex"
+values = { "0x29" = "serial number, label and type follow" }
+
+[[template.field]]
+name = "Volume serial number"
+offset = 67
+type = "u32"
+format = "hex"
+
+[[template.field]]
+name = "Volume label"
+offset = 71
+type = "ascii"
+length = 11
+
+[[template.field]]
+name = "File system type"
+offset = 82
+type = "ascii"
+length = 8
+
+[[template.field]]
+name = "Boot code"
+offset = 90
+type = "bytes"
+length = 420
+
+[[template.field]]
+name = "Boot signature"
+offset = 510
+type = "u16"
+format = "hex"
+values = { "0xAA55" = "valid (55 AA)" }
+
+
+[[template]]
+id = "fat_fsinfo"
+name = "FAT32 FSInfo sector"
+group = "FAT"
+description = "Hints for finding free clusters quickly (usually sector 1 of a FAT32 volume). The numbers may be out of date."
+size = 512
+signature = [{ offset = 0, hex = "52 52 61 41" }]
+
+[[template.field]]
+name = "Lead signature"
+offset = 0
+type = "u32"
+format = "hex"
+values = { "0x41615252" = "valid (RRaA)" }
+
+[[template.field]]
+name = "Reserved"
+offset = 4
+type = "bytes"
+length = 480
+
+[[template.field]]
+name = "Structure signature"
+offset = 484
+type = "u32"
+format = "hex"
+values = { "0x61417272" = "valid (rrAa)" }
+
+[[template.field]]
+name = "Free cluster count"
+offset = 488
+type = "u32"
+values = { "0xFFFFFFFF" = "unknown" }
+
+[[template.field]]
+name = "Next free cluster"
+offset = 492
+type = "u32"
+values = { "0xFFFFFFFF" = "unknown" }
+
+[[template.field]]
+name = "Reserved (2)"
+offset = 496
+type = "bytes"
+length = 12
+
+[[template.field]]
+name = "Trail signature"
+offset = 508
+type = "u32"
+format = "hex"
+values = { "0xAA550000" = "valid" }
+
+
+[[template]]
+id = "fat_dir_entries"
+name = "FAT directory entries"
+group = "FAT"
+description = "A directory's 32-byte entries. Long file names are stored in extra entries just before the short-name entry, last part first."
+extent = 512
+
+[[template.field]]
+name = "Entries"
+offset = 0
+type = "struct"
+template = "fat_dir_entry"
+count = "fill"
+
+
+[[template]]
+id = "fat_dir_entry"
+name = "FAT directory entry"
+group = "FAT"
+description = "One 32-byte directory entry: a short-name entry or a long-name entry."
+size = 32
+
+[[template.field]]
+name = "Attributes"
+offset = 11
+type = "u8"
+hidden = true
+
+[[template.field]]
+name = "Entry"
+offset = 0
+type = "struct"
+inline = true
+select = { value = "attributes & 0x3F == 0x0F", cases = { "1" = "fat_lfn_entry" }, default = "fat_short_entry" }
+
+
+[[template]]
+id = "fat_short_entry"
+name = "FAT short-name entry"
+group = "FAT"
+size = 32
+list = false
+summary = "{name}.{extension}"
+
+[[template.field]]
+name = "Name"
+offset = 0
+type = "ascii"
+length = 8
+description = "8.3 name, padded with spaces. A first byte of E5 means the entry was deleted."
+
+[[template.field]]
+name = "Extension"
+offset = 8
+type = "ascii"
+length = 3
+
+[[template.field]]
+name = "Attributes"
+offset = 11
+type = "u8"
+format = "hex"
+[template.field.flags]
+"0x01" = "read-only"
+"0x02" = "hidden"
+"0x04" = "system"
+"0x08" = "volume label"
+"0x10" = "directory"
+"0x20" = "archive"
+
+[[template.field]]
+name = "Case flags"
+offset = 12
+type = "u8"
+format = "hex"
+flags = { "0x08" = "name in lower case", "0x10" = "extension in lower case" }
+
+[[template.field]]
+name = "Created (10 ms units)"
+offset = 13
+type = "u8"
+
+[[template.field]]
+name = "Created time"
+offset = 14
+type = "fat_time"
+
+[[template.field]]
+name = "Created date"
+offset = 16
+type = "fat_date"
+
+[[template.field]]
+name = "Last access date"
+offset = 18
+type = "fat_date"
+
+[[template.field]]
+name = "First cluster (high 16 bits)"
+id = "cluster_high"
+offset = 20
+type = "u16"
+
+[[template.field]]
+name = "Modified time"
+offset = 22
+type = "fat_time"
+
+[[template.field]]
+name = "Modified date"
+offset = 24
+type = "fat_date"
+
+[[template.field]]
+name = "First cluster (low 16 bits)"
+id = "cluster_low"
+offset = 26
+type = "u16"
+
+[[template.field]]
+name = "File size"
+offset = 28
+type = "u32"
+
+[[template.field]]
+name = "Status"
+offset = 0
+type = "u8"
+format = "hex"
+description = "The first byte of the name, which also marks free and deleted entries."
+values = { "0x00" = "free (no more entries follow)", "0xE5" = "deleted", "0x2E" = "dot entry (. or ..)", "0x05" = "first character is E5" }
+
+
+[[template]]
+id = "fat_lfn_entry"
+name = "FAT long-name entry"
+group = "FAT"
+size = 32
+list = false
+summary = "{part1}{part2}{part3}"
+
+[[template.field]]
+name = "Sequence"
+offset = 0
+type = "u8"
+format = "hex"
+description = "Low 5 bits: which part of the name (1 = first). Adding 0x40 marks the last part, which is stored first. E5 means deleted."
+values = { "0xE5" = "deleted" }
+
+[[template.field]]
+name = "Name characters 1-5"
+id = "part1"
+offset = 1
+type = "utf16"
+length = 10
+
+[[template.field]]
+name = "Attributes"
+offset = 11
+type = "u8"
+format = "hex"
+values = { "0x0F" = "long-name entry" }
+
+[[template.field]]
+name = "Type"
+offset = 12
+type = "u8"
+
+[[template.field]]
+name = "Short name checksum"
+offset = 13
+type = "u8"
+format = "hex"
+
+[[template.field]]
+name = "Name characters 6-11"
+id = "part2"
+offset = 14
+type = "utf16"
+length = 12
+
+[[template.field]]
+name = "First cluster (always 0)"
+offset = 26
+type = "u16"
+
+[[template.field]]
+name = "Name characters 12-13"
+id = "part3"
+offset = 28
+type = "utf16"
+length = 4
