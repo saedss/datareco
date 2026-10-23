@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use datareco_fs::testutil::{
-    FatBuilder, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, STAMP, disk, noise, text,
+    EXT_ROOT, ExtBuilder, ExtOptions, FatBuilder, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, STAMP,
+    disk, noise, text,
 };
 use datareco_fs::{Entry, FileSystem, FsKind, read_to_end, resolve};
 
@@ -172,6 +173,51 @@ fn a_quick_scan_finds_the_volumes_in_the_partition_table() {
     }
     assert_eq!(found[0].label.as_deref(), Some("Data"));
     assert_eq!(found[1].label.as_deref(), Some("USB"));
+}
+
+#[test]
+fn scans_find_ext_volumes_and_open_them_from_a_backup_superblock() {
+    // A partitioned ext4 volume: a quick scan finds it as it is.
+    let mut b = ExtBuilder::new(ExtOptions::ext4());
+    b.label("linux");
+    b.file(EXT_ROOT, "hello.txt", &text("hello", 500));
+    let quick = disk(mbr_disk(&[(1 << 20, 0x83, &b.build())]));
+    let found = Scan::run(&quick, ScanMode::Quick).unwrap();
+    let volume = find(&found, FsKind::Ext4);
+    assert_eq!((volume.state, volume.in_table), (VolumeState::Intact, true));
+    assert_eq!(volume.label.as_deref(), Some("linux"));
+    let fs = open_found(Arc::clone(&quick), volume).unwrap();
+    let hello = resolve(fs.as_ref(), "hello.txt", false).unwrap();
+    assert_eq!(read_all(fs.as_ref(), &hello), text("hello", 500));
+
+    // ext2 as mke2fs lays it out (8192 blocks per group), its superblock
+    // wiped: a full scan finds the copy in block group 1 and opens with it.
+    let options = ExtOptions {
+        blocks_per_group: 8192,
+        ..ExtOptions::ext2()
+    };
+    let mut b = ExtBuilder::new(options);
+    let docs = b.mkdir(EXT_ROOT, "docs");
+    b.file(docs, "notes.txt", &text("notes", 4000));
+    let mut volume_image = b.build();
+    volume_image[1024..2048].fill(0);
+    let image = mbr_disk(&[(1 << 20, 0x83, &volume_image)]);
+    let disk = disk(image);
+    let found = Scan::run(&disk, ScanMode::Full).unwrap();
+    let volume = find(&found, FsKind::Ext2);
+    assert_eq!(volume.state, VolumeState::FromBackup);
+    assert_eq!(volume.offset, 1 << 20);
+    assert!(
+        volume
+            .evidence
+            .iter()
+            .any(|e| e.contains("backup superblock")),
+        "{:?}",
+        volume.evidence
+    );
+    let fs = open_found(Arc::clone(&disk), volume).unwrap();
+    let notes = resolve(fs.as_ref(), "docs/notes.txt", false).unwrap();
+    assert_eq!(read_all(fs.as_ref(), &notes), text("notes", 4000));
 }
 
 #[test]

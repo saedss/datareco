@@ -5,7 +5,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datareco_fs::{Entry, EntryId, FileSystem, FsError, FsKind, resolve};
+use datareco_fs::{Entry, EntryId, FileSystem, FsError, can_read, resolve};
 use datareco_io::{Disk, SourceSpec};
 use datareco_partitions::read_table;
 
@@ -34,13 +34,6 @@ pub struct VolumeChoice {
     pub scan: Option<(PathBuf, usize)>,
     /// A saved raw scan (`datareco raw --save`): the files it found.
     pub raw: Option<PathBuf>,
-}
-
-fn readable(kind: FsKind) -> bool {
-    matches!(
-        kind,
-        FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::Exfat | FsKind::Ntfs
-    )
 }
 
 pub fn open_volume(source: &str, choice: &VolumeChoice) -> Result<Box<dyn FileSystem>, CliError> {
@@ -81,7 +74,7 @@ pub fn open_volume(source: &str, choice: &VolumeChoice) -> Result<Box<dyn FileSy
             let candidates: Vec<_> = table
                 .partitions
                 .iter()
-                .filter(|p| p.file_system.as_ref().is_some_and(|fs| readable(fs.kind)))
+                .filter(|p| p.file_system.as_ref().is_some_and(|fs| can_read(fs.kind)))
                 .collect();
             match candidates.as_slice() {
                 _ if table.whole_disk.is_some() || table.partitions.is_empty() => 0,
@@ -114,8 +107,13 @@ pub fn describe(fs: &dyn FileSystem) -> String {
         .as_ref()
         .map(|l| format!(" \"{l}\""))
         .unwrap_or_default();
+    let unit = if info.name.starts_with("ext") {
+        "block"
+    } else {
+        "cluster"
+    };
     format!(
-        "{}{label}, {}, cluster size {}",
+        "{}{label}, {}, {unit} size {}",
         info.name,
         format_size(info.size),
         format_size(info.cluster_size)

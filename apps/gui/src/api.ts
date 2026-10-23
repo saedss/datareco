@@ -167,6 +167,7 @@ export type EntryId =
   | { kind: "clusters"; cluster: number; length: number; chain: boolean }
   | { kind: "fixedRoot" }
   | { kind: "record"; number: number }
+  | { kind: "inode"; number: number; deleted: boolean }
   | { kind: "orphans" }
   | { kind: "lostFolder"; number: number }
   | { kind: "span"; offset: number; length: number }

@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use datareco_fs::{FatLayout, FatRoot, FileSystem, FsError, FsKind, Rebuild, clues, open_rebuilt};
+use datareco_fs::{
+    FatLayout, FatRoot, FileSystem, FsError, FsKind, Rebuild, can_read, clues, open_rebuilt,
+};
 use datareco_io::Disk;
 use datareco_partitions::{FoundPartition, PartitionTable, identify};
 use serde::Serialize;
@@ -72,13 +74,6 @@ pub(crate) struct Clues<'a> {
     pub tables: &'a [TableClue],
 }
 
-fn readable(kind: FsKind) -> bool {
-    matches!(
-        kind,
-        FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::Exfat | FsKind::Ntfs
-    )
-}
-
 fn is_fat(kind: FsKind) -> bool {
     matches!(kind, FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32)
 }
@@ -90,7 +85,7 @@ pub(crate) fn build(disk: &Arc<Disk>, clues: &Clues) -> Result<Vec<FoundVolume>,
         let Some(fs) = &partition.file_system else {
             continue;
         };
-        if !readable(fs.kind) {
+        if !can_read(fs.kind) {
             continue;
         }
         let offset = partition.start_lba * sector;
@@ -128,14 +123,28 @@ fn from_boot_sector(
     if identify(disk, offset)?.is_some_and(|fs| fs.kind == kind) {
         attempts.push((None, VolumeState::Intact));
     }
+    let ext = matches!(kind, FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4);
     let backups = match kind {
         FsKind::Ntfs => vec![offset + size.saturating_sub(sector)],
         FsKind::Fat32 => vec![offset + 6 * sector],
         FsKind::Exfat => vec![offset + 12 * sector],
+        // Block group 1's superblock, for each usual block size (groups of
+        // 8 x block size blocks; with 1 KiB blocks, groups start at block 1).
+        _ if ext => vec![
+            offset + 8193 * 1024,
+            offset + 16384 * 2048,
+            offset + 32768 * 4096,
+        ],
         _ => Vec::new(),
     };
     for backup in backups {
-        if backup < disk.size() && identify(disk, backup)?.is_some_and(|fs| fs.kind == kind) {
+        // An ext superblock sits 1024 bytes into what `identify` looks at.
+        let looked_at = if ext { backup - 1024 } else { backup };
+        let inside = !ext || backup + 1024 <= offset.saturating_add(size);
+        if inside
+            && backup < disk.size()
+            && identify(disk, looked_at)?.is_some_and(|fs| fs.kind == kind)
+        {
             attempts.push((Some(backup), VolumeState::FromBackup));
         }
     }
@@ -150,8 +159,13 @@ fn from_boot_sector(
         };
         let mut evidence = partition.evidence.clone();
         if let Some(at) = boot_sector {
+            let what = if ext {
+                "backup superblock"
+            } else {
+                "backup boot sector"
+            };
             evidence.push(format!(
-                "opened with its backup boot sector at byte {at} (its own is gone or overwritten)"
+                "opened with its {what} at byte {at} (its own is gone or overwritten)"
             ));
         }
         if !records.is_empty() {

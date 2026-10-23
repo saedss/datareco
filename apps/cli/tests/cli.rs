@@ -773,3 +773,61 @@ fn clone_only_writes_to_disks_it_can_check() {
     );
     std::fs::remove_file(source).unwrap();
 }
+
+/// An ext4 volume with a folder, and a file deleted after the journal
+/// recorded it.
+fn ext4_volume(name: &str) -> PathBuf {
+    use datareco_fs::testutil::{EXT_ROOT, ExtBuilder, ExtOptions, text};
+    let mut b = ExtBuilder::new(ExtOptions::ext4());
+    b.label("cli_ext4");
+    b.file(
+        EXT_ROOT,
+        "readme.txt",
+        b"hello from ext4
+",
+    );
+    let docs = b.mkdir(EXT_ROOT, "docs");
+    b.file(docs, "notes.txt", &text("notes", 5000));
+    let old = b.file(EXT_ROOT, "old.txt", &text("old", 3000));
+    b.commit();
+    b.delete(old);
+    temp_image(name, &b.build())
+}
+
+#[test]
+fn ext4_volumes_list_and_recover_deleted_files_too() {
+    let image = ext4_volume("ext4.img");
+    let out = datareco(&["ls", image.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("ext4 \"cli_ext4\""), "{text}");
+    assert!(text.contains("block size 4.0 KiB"), "{text}");
+    assert!(text.contains("docs/"), "{text}");
+    assert!(text.contains("deleted  old.txt"), "{text}");
+
+    let out = datareco(&["cat", image.to_str().unwrap(), "readme.txt"]);
+    assert_eq!(
+        out.stdout,
+        b"hello from ext4
+"
+    );
+
+    let destination = temp_folder("ext4-recovered");
+    let out = datareco(&[
+        "recover",
+        image.to_str().unwrap(),
+        "--to",
+        destination.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read(destination.join("docs").join("notes.txt")).unwrap(),
+        datareco_fs::testutil::text("notes", 5000)
+    );
+    assert_eq!(
+        std::fs::read(destination.join("old.txt")).unwrap(),
+        datareco_fs::testutil::text("old", 3000)
+    );
+    std::fs::remove_dir_all(destination).unwrap();
+    std::fs::remove_file(image).unwrap();
+}
