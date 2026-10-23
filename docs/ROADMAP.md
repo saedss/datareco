@@ -41,7 +41,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done (`ntfs-reformatted` by raw recovery, see the note) |
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
-| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | |
+| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | ext2/3/4 done |
 | 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
 | 10 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -58,6 +58,12 @@ on through every pass, are tested in memory, and copies into image files are
 tested end to end. Writing onto a real disk (locking and dismounting its volumes,
 writing straight to the drive) needs administrator rights and a spare disk, so it
 hasn't been run yet; the safety checks in front of it are tested.
+
+Note on Phase 8, ext2/3/4: folders, extent trees and block maps, holes, symbolic
+links, hash-tree folders, backup superblocks and deleted files (from folder slack,
+with sizes and data from older inode copies in the journal) are tested on volumes
+built in memory. The `ext4` test images are made by mkfs.ext4 on Linux, so their
+tests run in CI only.
 
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete

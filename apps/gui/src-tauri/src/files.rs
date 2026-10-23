@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use datareco_fs::{Entry, EntryId, Extent, FileSystem, FsError, FsKind, VolumeInfo};
+use datareco_fs::{Entry, EntryId, Extent, FileSystem, FsError, FsKind, VolumeInfo, can_read};
 use datareco_io::SourceSpec;
 use datareco_partitions::read_table;
 use datareco_scan::{Control, RecoverError, RecoverOptions, RecoverProgress, RecoverSummary};
@@ -106,13 +106,6 @@ pub struct VolumeChoice {
     readable: bool,
 }
 
-fn readable(kind: FsKind) -> bool {
-    matches!(
-        kind,
-        FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::Exfat | FsKind::Ntfs
-    )
-}
-
 /// The volumes on a source, from its partition table.
 #[tauri::command(async)]
 pub fn list_volumes(
@@ -131,7 +124,7 @@ pub fn list_volumes(
             name: fs.name.clone(),
             label: fs.label.clone(),
             size: fs.size,
-            readable: readable(fs.kind),
+            readable: can_read(fs.kind),
         });
     }
     for partition in &table.partitions {
@@ -147,7 +140,7 @@ pub fn list_volumes(
             name: fs.name.clone(),
             label: fs.label.clone(),
             size: Some(partition.sectors * u64::from(table.sector_size)),
-            readable: readable(fs.kind),
+            readable: can_read(fs.kind),
         });
     }
     Ok(volumes)

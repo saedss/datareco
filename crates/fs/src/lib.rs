@@ -1,5 +1,6 @@
 //! File-system readers: browse folders, read files, and find deleted entries.
-//! NTFS, FAT12/16/32 and exFAT for now; ext, HFS+, APFS, ReFS and btrfs later.
+//! NTFS, FAT12/16/32, exFAT and ext2/3/4 for now; HFS+, APFS, ReFS and btrfs
+//! later.
 //!
 //! [`open`] recognizes the file system at an offset of a [`Disk`] and returns
 //! a [`FileSystem`]: list folders (deleted entries included), read files and
@@ -17,6 +18,7 @@ mod bytes;
 mod clusters;
 mod error;
 mod exfat;
+mod ext;
 mod fat;
 mod ntfs;
 mod time;
@@ -24,6 +26,8 @@ mod volume;
 
 #[cfg(test)]
 mod tests_exfat;
+#[cfg(test)]
+mod tests_ext;
 #[cfg(test)]
 mod tests_fat;
 #[cfg(test)]
@@ -76,6 +80,9 @@ pub enum EntryId {
     Span { offset: u64, length: u64 },
     /// A folder of a listing that isn't on the disk (raw recovery's file types).
     Group { index: u32 },
+    /// An ext inode. A `deleted` entry is read from what's left of the
+    /// inode, or an older copy of it in the journal.
+    Inode { number: u64, deleted: bool },
 }
 
 /// Windows file attribute bits, as `Entry::attributes` uses them.
@@ -170,6 +177,21 @@ pub trait FileSystem: Send + Sync {
     fn extents(&self, file: &EntryId, stream: Option<&str>) -> Result<Vec<Extent>, FsError>;
 }
 
+/// Whether DataReco can read this kind of file system yet.
+pub fn can_read(kind: FsKind) -> bool {
+    matches!(
+        kind,
+        FsKind::Fat12
+            | FsKind::Fat16
+            | FsKind::Fat32
+            | FsKind::Exfat
+            | FsKind::Ntfs
+            | FsKind::Ext2
+            | FsKind::Ext3
+            | FsKind::Ext4
+    )
+}
+
 /// Opens the file system starting at byte `offset` of `disk`.
 pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError> {
     let found = datareco_partitions::identify(&disk, offset)?.ok_or_else(|| {
@@ -181,6 +203,7 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
         FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 => Ok(Box::new(fat::Fat::open(volume)?)),
         FsKind::Exfat => Ok(Box::new(exfat::Exfat::open(volume)?)),
         FsKind::Ntfs => Ok(Box::new(ntfs::Ntfs::open(volume)?)),
+        FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4 => Ok(Box::new(ext::Ext::open(volume)?)),
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()
@@ -193,7 +216,7 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
 pub struct Rebuild {
     /// A boot sector to use instead of the one at the volume's start, by its
     /// byte offset on the disk: a backup copy (NTFS keeps one at the end,
-    /// FAT32 in sector 6, exFAT in sector 12).
+    /// FAT32 in sector 6, exFAT in sector 12). For ext, a backup superblock.
     pub boot_sector: Option<u64>,
     /// NTFS: MFT records found on the disk, record number → byte offset on
     /// the disk. They stand in for records the MFT has no readable copy of.
@@ -211,9 +234,10 @@ pub fn open_rebuilt(
     size: u64,
     rebuild: &Rebuild,
 ) -> Result<Box<dyn FileSystem>, FsError> {
+    let is_ext = matches!(kind, FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4);
     let boot = match rebuild.boot_sector {
         Some(at) => {
-            let mut sector = vec![0; 512];
+            let mut sector = vec![0; if is_ext { 1024 } else { 512 }];
             disk.read_at(at, &mut sector)?;
             Some(sector)
         }
@@ -240,6 +264,9 @@ pub fn open_rebuilt(
             (None, None) => Ok(Box::new(fat::Fat::open(volume)?)),
         },
         FsKind::Exfat => Ok(Box::new(exfat::Exfat::open_with_boot(volume, boot)?)),
+        FsKind::Ext2 | FsKind::Ext3 | FsKind::Ext4 => {
+            Ok(Box::new(ext::Ext::open_with(volume, boot)?))
+        }
         other => Err(FsError::Unsupported(format!(
             "Reading {} volumes isn't supported yet.",
             other.name()

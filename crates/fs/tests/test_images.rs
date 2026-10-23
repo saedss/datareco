@@ -1,6 +1,7 @@
 //! File-system reading against the generated test disk images
 //! (testdata/README.md): every live file reads back with the right hash,
-//! NTFS streams too, and deleted files are listed.
+//! NTFS streams too, and deleted files are listed. ext4 deleted files come
+//! back from older copies of their inodes in the journal.
 //!
 //! The images live in `testdata/out` (or `$DATARECO_TESTDATA`). Without them
 //! these tests pass with a note, unless `DATARECO_REQUIRE_TESTDATA=1`.
@@ -42,7 +43,10 @@ fn volumes(dir: &Path, images: &[Value]) -> Vec<(String, Box<dyn FileSystem>, Va
         let disk = Arc::new(Disk::open(&SourceSpec::Image(path)).unwrap());
         for volume in image["volumes"].as_array().unwrap() {
             let kind = volume["fs"].as_str().unwrap();
-            if !matches!(kind, "fat12" | "fat16" | "fat32" | "exfat" | "ntfs") {
+            if !matches!(
+                kind,
+                "fat12" | "fat16" | "fat32" | "exfat" | "ntfs" | "ext4"
+            ) {
                 continue;
             }
             let name = format!("{}/{kind}", image["name"].as_str().unwrap());
@@ -53,7 +57,7 @@ fn volumes(dir: &Path, images: &[Value]) -> Vec<(String, Box<dyn FileSystem>, Va
     }
     assert!(
         !found.is_empty(),
-        "no FAT, exFAT or NTFS volumes in the test images"
+        "no FAT, exFAT, NTFS or ext4 volumes in the test images"
     );
     found
 }
@@ -98,7 +102,8 @@ fn live_files_read_back_with_the_right_hash() {
         return;
     };
     for (name, fs, volume) in volumes(&dir, &images) {
-        if volume["fs"] == "ntfs" || volume["fs"].as_str().unwrap().starts_with("fat") {
+        let kind = volume["fs"].as_str().unwrap();
+        if kind == "ntfs" || kind == "ext4" || kind.starts_with("fat") {
             assert_eq!(
                 fs.info().label.as_deref(),
                 volume["label"].as_str(),
@@ -108,6 +113,11 @@ fn live_files_read_back_with_the_right_hash() {
         assert_eq!(
             fs.info().kind == FsKind::Ntfs,
             volume["fs"] == "ntfs",
+            "{name}"
+        );
+        assert_eq!(
+            fs.info().kind == FsKind::Ext4,
+            volume["fs"] == "ext4",
             "{name}"
         );
         for file in volume["files"]
@@ -124,7 +134,7 @@ fn live_files_read_back_with_the_right_hash() {
             let data = read_to_end(fs.as_ref(), &entry.id, None, u64::MAX)
                 .unwrap_or_else(|e| panic!("{name}: reading {path}: {e}"));
             assert_eq!(sha256(&data), file["sha256"], "{name}: {path}");
-            if volume["fs"] == "ntfs" {
+            if volume["fs"] == "ntfs" || volume["fs"] == "ext4" {
                 assert_eq!(entry.modified, file["mtime"].as_i64(), "{name}: {path}");
             }
         }
@@ -166,16 +176,26 @@ fn deleted_files_are_listed() {
         return;
     };
     for (name, fs, volume) in volumes(&dir, &images) {
+        let ext = volume["fs"] == "ext4";
+        let mut recovered = 0;
+        let mut deleted = 0;
         for file in volume["files"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|f| f["state"] == "deleted")
         {
+            deleted += 1;
             let path = file["path"].as_str().unwrap();
             let entry = find(fs.as_ref(), path, true)
                 .unwrap_or_else(|| panic!("{name}: deleted {path} not listed"));
             assert!(entry.deleted, "{name}: {path} isn't marked deleted");
+            // ext4 clears a deleted file's size; it comes back only when
+            // the journal still has an older copy of its inode.
+            if ext && entry.size == 0 {
+                continue;
+            }
+            recovered += 1;
             assert_eq!(entry.size, file["size"].as_u64().unwrap(), "{name}: {path}");
             // Nothing overwrote these, and a file in one piece is found whole.
             if file["extents"].as_u64() == Some(1) {
@@ -183,6 +203,12 @@ fn deleted_files_are_listed() {
                     .unwrap_or_else(|e| panic!("{name}: reading deleted {path}: {e}"));
                 assert_eq!(sha256(&data), file["sha256"], "{name}: deleted {path}");
             }
+        }
+        if ext && deleted > 0 {
+            assert!(
+                recovered > 0,
+                "{name}: no deleted file came back from the journal"
+            );
         }
     }
 }
