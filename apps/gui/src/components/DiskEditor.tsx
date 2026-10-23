@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ByteData, CommandError, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
+import { ByteData, CommandError, RawStatus, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
 import { FileBrowser } from "./FileBrowser";
@@ -37,6 +37,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
   const [filesOpened, setFilesOpened] = useState(false);
   const [scanOpened, setScanOpened] = useState(false);
   const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [raw, setRaw] = useState<RawStatus | null>(null);
   const [browse, setBrowse] = useState<{ key: string; nonce: number } | null>(null);
   const latestRead = useRef(0);
 
@@ -188,6 +189,7 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
                 sourceId={info.id}
                 sectorSize={info.sectorSize}
                 scan={scan}
+                raw={raw}
                 request={browse}
                 onShowInSectors={(offset, length) => {
                   setView("sectors");
@@ -203,6 +205,9 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
                 sectorSize={info.sectorSize}
                 status={scan}
                 onStatus={setScan}
+                raw={raw}
+                onRaw={setRaw}
+
                 onBrowse={(key) => {
                   setBrowse((current) => ({ key, nonce: (current?.nonce ?? 0) + 1 }));
                   showView("files");

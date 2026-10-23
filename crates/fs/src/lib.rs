@@ -72,6 +72,10 @@ pub enum EntryId {
     Orphans,
     /// NTFS: a folder whose own record is gone, standing for what's in it.
     LostFolder { number: u64 },
+    /// A file found by its contents: `length` bytes at byte `offset` of the disk.
+    Span { offset: u64, length: u64 },
+    /// A folder of a listing that isn't on the disk (raw recovery's file types).
+    Group { index: u32 },
 }
 
 /// Windows file attribute bits, as `Entry::attributes` uses them.

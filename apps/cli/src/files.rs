@@ -32,6 +32,8 @@ pub struct VolumeChoice {
     pub offset: Option<u64>,
     /// A saved scan (`datareco scan --save`) and a volume number from its list.
     pub scan: Option<(PathBuf, usize)>,
+    /// A saved raw scan (`datareco raw --save`): the files it found.
+    pub raw: Option<PathBuf>,
 }
 
 fn readable(kind: FsKind) -> bool {
@@ -43,6 +45,9 @@ fn readable(kind: FsKind) -> bool {
 
 pub fn open_volume(source: &str, choice: &VolumeChoice) -> Result<Box<dyn FileSystem>, CliError> {
     let disk = Arc::new(Disk::open(&SourceSpec::parse(source))?);
+    if let Some(path) = &choice.raw {
+        return crate::raw::saved_volume(disk, source, path);
+    }
     if let Some((path, number)) = &choice.scan {
         let found = crate::scan::saved_results(&disk, source, path)?;
         let volume = number

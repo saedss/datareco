@@ -15,6 +15,7 @@ use serde::Serialize;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
 
+use crate::raw::RawScans;
 use crate::scans::Scans;
 use crate::{CommandError, OpenSources};
 
@@ -45,10 +46,11 @@ impl FileSystems {
     fn get_or_open(
         &self,
         sources: &OpenSources,
-        scans: &Scans,
+        scans: (&Scans, &RawScans),
         id: &str,
         volume: &str,
     ) -> Result<Arc<dyn FileSystem>, CommandError> {
+        let (scans, raws) = scans;
         let source = SourceSpec::parse(id).id();
         let key = (source.clone(), volume.to_owned());
         if let Some(fs) = self.lock().get(&key) {
@@ -67,6 +69,13 @@ impl FileSystems {
                 index.parse().map_err(|_| bad_key())?,
             )?;
             Arc::from(datareco_scan::open_found(disk, &found)?)
+        } else if let Some(rest) = volume.strip_prefix("raw:") {
+            let (generation, snapshot) = rest.split_once(':').ok_or_else(bad_key)?;
+            raws.volume(
+                &source,
+                generation.parse().map_err(|_| bad_key())?,
+                snapshot.parse().map_err(|_| bad_key())?,
+            )?
         } else {
             return Err(bad_key());
         };
@@ -156,11 +165,12 @@ pub struct OpenedVolume {
 pub fn open_file_system(
     sources: State<'_, OpenSources>,
     scans: State<'_, Scans>,
+    raws: State<'_, RawScans>,
     systems: State<'_, FileSystems>,
     id: String,
     volume: String,
 ) -> Result<OpenedVolume, CommandError> {
-    let fs = systems.get_or_open(&sources, &scans, &id, &volume)?;
+    let fs = systems.get_or_open(&sources, (&scans, &raws), &id, &volume)?;
     Ok(OpenedVolume {
         info: fs.info().clone(),
         root: fs.root(),
@@ -172,12 +182,13 @@ pub fn open_file_system(
 pub fn list_directory(
     sources: State<'_, OpenSources>,
     scans: State<'_, Scans>,
+    raws: State<'_, RawScans>,
     systems: State<'_, FileSystems>,
     id: String,
     volume: String,
     dir: EntryId,
 ) -> Result<Vec<Entry>, CommandError> {
-    let fs = systems.get_or_open(&sources, &scans, &id, &volume)?;
+    let fs = systems.get_or_open(&sources, (&scans, &raws), &id, &volume)?;
     Ok(fs.list(&dir)?)
 }
 
@@ -187,6 +198,7 @@ pub fn list_directory(
 pub fn read_file(
     sources: State<'_, OpenSources>,
     scans: State<'_, Scans>,
+    raws: State<'_, RawScans>,
     systems: State<'_, FileSystems>,
     id: String,
     volume: String,
@@ -195,7 +207,7 @@ pub fn read_file(
     start: u64,
     length: u64,
 ) -> Result<Response, CommandError> {
-    let fs = systems.get_or_open(&sources, &scans, &id, &volume)?;
+    let fs = systems.get_or_open(&sources, (&scans, &raws), &id, &volume)?;
     let length = usize::try_from(length.min(MAX_FILE_READ)).unwrap_or(0);
     let mut data = vec![0; length];
     let mut done = 0;
@@ -217,16 +229,18 @@ pub fn read_file(
 
 /// Where a file's data is on the source.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)] // each is one field of the request
 pub fn file_extents(
     sources: State<'_, OpenSources>,
     scans: State<'_, Scans>,
+    raws: State<'_, RawScans>,
     systems: State<'_, FileSystems>,
     id: String,
     volume: String,
     file: EntryId,
     stream: Option<String>,
 ) -> Result<Vec<Extent>, CommandError> {
-    let fs = systems.get_or_open(&sources, &scans, &id, &volume)?;
+    let fs = systems.get_or_open(&sources, (&scans, &raws), &id, &volume)?;
     Ok(fs.extents(&file, stream.as_deref())?)
 }
 
@@ -241,6 +255,7 @@ pub struct Recoveries(Mutex<HashMap<String, Arc<AtomicBool>>>);
 pub fn recover_files(
     sources: State<'_, OpenSources>,
     scans: State<'_, Scans>,
+    raws: State<'_, RawScans>,
     systems: State<'_, FileSystems>,
     recoveries: State<'_, Recoveries>,
     id: String,
@@ -252,7 +267,7 @@ pub fn recover_files(
 ) -> Result<RecoverSummary, CommandError> {
     let spec = SourceSpec::parse(&id);
     datareco_scan::check_destination(&spec, &destination)?;
-    let fs = systems.get_or_open(&sources, &scans, &id, &volume)?;
+    let fs = systems.get_or_open(&sources, (&scans, &raws), &id, &volume)?;
     let items = match items {
         Some(items) => items,
         None => fs

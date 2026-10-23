@@ -8,8 +8,10 @@
 //! - [`recover`]: copies files and folders out of a volume to a folder on
 //!   another disk, with their times, a log and SHA-256 checksums.
 //!
-//! Raw recovery by file signature comes in Phase 6 (see docs/ROADMAP.md).
+//! - [`raw`]: raw recovery, finding files by their contents (signatures)
+//!   when no file system says where they are.
 
+pub mod raw;
 mod recover;
 mod scan;
 mod volumes;

@@ -35,8 +35,8 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 2 | Disk editor (view only) | Hex and text view over the whole disk; go to sector/offset; search hex/text; bookmarks; structure templates (MBR, GPT, FAT/exFAT/NTFS boot sectors, MFT record, directory entries); user-editable templates | Templates decode every structure in the test images correctly || Done |
 | 3 | Partitions | MBR (incl. extended/logical) and GPT, with errors flagged; lost-partition search from boot sectors, superblocks and their backups | `mbr-wiped` and `gpt-header-damaged` partitions are found || Done |
 | 4 | NTFS, FAT, exFAT | Browse folders and read files, including deleted ones. NTFS: compressed and sparse files, alternate data streams, orphaned files. FAT/exFAT: deleted entries, long names, guessing where a deleted file's data was | Every live file in the test images reads back with the right hash; deleted ones are listed | Done |
-| 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done, but see the note on `ntfs-reformatted` |
-| 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | |
+| 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done (`ntfs-reformatted` by raw recovery, see the note) |
+| 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | |
 | 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | |
 | 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
@@ -45,9 +45,11 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 Note on Phase 5 and `ntfs-reformatted`: the full scan finds the old NTFS volume
 (from its backup boot sector) and opens it, but very likely with no files in it. On
 that 48 MiB test volume, mkntfs puts the MFT 16 KiB in, inside the area the new
-FAT32 tables overwrite, so its file records are gone; its files come back by
-signature in Phase 6. On real disks the MFT sits far from the start, and a full
-scan recovers files after such a format (tested on volumes built in memory).
+FAT32 tables overwrite, so its file records are gone. Its files come back by their
+contents with raw recovery (Phase 6), which the image tests check. On real disks the
+MFT sits far from the start, and a full scan recovers files after such a format,
+names and folders included (tested on volumes built in memory).
+
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete
 NTFS files directly on disk; free and paid editions with activation.
