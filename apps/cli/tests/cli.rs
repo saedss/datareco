@@ -885,3 +885,26 @@ fn hfs_plus_volumes_list_read_forks_and_recover() {
     std::fs::remove_dir_all(destination).unwrap();
     std::fs::remove_file(image).unwrap();
 }
+
+#[test]
+fn apfs_containers_list_their_volumes_and_files() {
+    use datareco_fs::testutil::{APFS_ROOT, ApfsBuilder, text};
+    let mut b = ApfsBuilder::new(1024);
+    let data = b.volume("Mac Data", 0x40, false);
+    b.file(data, APFS_ROOT, "readme.txt", b"hello from APFS\n");
+    let docs = b.mkdir(data, APFS_ROOT, "docs");
+    b.file(data, docs, "notes.txt", &text("notes", 5000));
+    let image = temp_image("apfs.img", &b.build());
+
+    let out = datareco(&["ls", image.to_str().unwrap(), "-r"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listing = stdout(&out);
+    assert!(listing.starts_with("APFS, "), "{listing}");
+    assert!(listing.contains("block size 4.0 KiB"), "{listing}");
+    assert!(listing.contains("Mac Data/docs/notes.txt"), "{listing}");
+
+    let out = datareco(&["cat", image.to_str().unwrap(), "Mac Data/readme.txt"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"hello from APFS\n");
+    std::fs::remove_file(image).unwrap();
+}

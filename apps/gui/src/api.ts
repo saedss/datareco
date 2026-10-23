@@ -169,6 +169,7 @@ export type EntryId =
   | { kind: "record"; number: number }
   | { kind: "inode"; number: number; deleted: boolean }
   | { kind: "catalog"; id: number; deleted: boolean }
+  | { kind: "apfs"; volume: number; id: number }
   | { kind: "orphans" }
   | { kind: "lostFolder"; number: number }
   | { kind: "span"; offset: number; length: number }

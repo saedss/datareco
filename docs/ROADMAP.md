@@ -41,7 +41,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done (`ntfs-reformatted` by raw recovery, see the note) |
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
-| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | ext2/3/4 and HFS+ done |
+| 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | ext2/3/4, HFS+ and APFS done (APFS: see the note) |
 | 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
 | 10 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -71,6 +71,15 @@ records left over in catalog nodes are tested on volumes built in memory. The
 `hfsplus` test image needs a Linux kernel with the HFS+ driver; where it has none,
 the image and its tests are skipped. Deleted HFS+ files come back only when the
 driver left their catalog record behind, which it often doesn't.
+
+Note on Phase 8, APFS: containers (the newest valid checkpoint, object maps),
+several volumes, file-system trees with index nodes, data and resource forks,
+hard links, symbolic links, holes and decomposed names are tested on containers
+built in memory from Apple's APFS reference. No Linux tool writes APFS, so there is
+no generated test image; a small one made on a Mac would let the image tests cover
+it (see testdata/README.md). Not yet: encrypted volumes, snapshots, compressed
+files, and deleted files (which on APFS means searching for older copies of
+B-tree nodes).
 
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete

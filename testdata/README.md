@@ -44,6 +44,11 @@ The full set is about 800 MB and lands in `testdata/out/`, which git ignores.
 
 The first seven have no partition table: the volume starts at byte 0.
 
+No Linux tool writes APFS, so there is no APFS image. On a Mac, a small raw one
+can be made with `hdiutil create -size 40m -fs APFS -volname dr_apfs -layout NONE
+apfs.dmg`, then filled in Finder and converted with `hdiutil convert apfs.dmg
+-format UDTO -o apfs` (the result, `apfs.cdr`, is a raw image DataReco opens).
+
 `hfsplus` needs `hfsprogs` and a kernel with the HFS+ driver (`modprobe hfsplus`).
 Some kernels lack it, Docker Desktop's among them; the generator then skips that
 image and says why, and the tests that need it skip too.
