@@ -200,6 +200,16 @@ impl FatBuilder {
         self.sectors_per_cluster * 512
     }
 
+    /// Where cluster 2 starts, in bytes.
+    pub fn data_start(&self) -> usize {
+        self.root_start() + self.root_entries * 32
+    }
+
+    /// How many clusters the volume has.
+    pub fn cluster_count(&self) -> usize {
+        self.fat.len() - 2
+    }
+
     fn root_start(&self) -> usize {
         (self.reserved + 2 * self.fat_sectors) * 512
     }

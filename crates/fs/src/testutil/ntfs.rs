@@ -1,5 +1,6 @@
 //! NTFS volumes for tests: 512-byte sectors, 4 KiB clusters, 1 KiB MFT
-//! records, and an MFT of 64 records in two fragments.
+//! records, and an MFT of 64 records in two fragments. Like mkntfs, the MFT
+//! starts 16 KiB in and its mirror is in the middle of the volume.
 
 use super::{STAMP, put};
 use crate::attributes;
@@ -87,8 +88,9 @@ impl NtfsBuilder {
             next_record: FIRST_FILE,
             mft_runs: mft_runs.clone(),
         };
-        // Boot sector, mirror, $Bitmap's data and the MFT; the backup boot sector.
+        // Boot sector, $Bitmap's data and the MFT; the mirror; the backup boot sector.
         for c in (0..12)
+            .chain([clusters / 2])
             .chain(clusters - 16..clusters - 8)
             .chain([clusters - 1])
         {
@@ -110,7 +112,7 @@ impl NtfsBuilder {
             1,
             "$MFTMirr",
             hidden,
-            data_runs("", &[(Some(2), 1)], 4096, 4096, 0, 0),
+            data_runs("", &[(Some(clusters / 2), 1)], 4096, 4096, 0, 0),
         );
         let bitmap_size = b.bitmap.len() as u64;
         b.system(
@@ -176,6 +178,11 @@ impl NtfsBuilder {
 
     /// The next `count` free clusters, in one piece; the first one's number.
     pub fn alloc(&mut self, count: usize) -> usize {
+        // Skip the mirror's cluster.
+        let mirror = self.clusters / 2;
+        if self.next_cluster <= mirror && self.next_cluster + count > mirror {
+            self.next_cluster = mirror + 1;
+        }
         let first = self.next_cluster;
         self.next_cluster += count;
         assert!(self.next_cluster < self.clusters - 16, "volume full");
@@ -467,7 +474,7 @@ impl NtfsBuilder {
         boot[21] = 0xF8;
         boot[40..48].copy_from_slice(&(self.clusters as u64 * 8 - 1).to_le_bytes());
         boot[48..56].copy_from_slice(&4u64.to_le_bytes());
-        boot[56..64].copy_from_slice(&2u64.to_le_bytes());
+        boot[56..64].copy_from_slice(&(self.clusters as u64 / 2).to_le_bytes());
         boot[64] = 0xF6; // 2^10-byte records
         boot[68] = 1;
         boot[510..512].copy_from_slice(&[0x55, 0xAA]);
@@ -482,7 +489,11 @@ impl NtfsBuilder {
                 let at = self.record_offset(n as u64);
                 put(&mut self.image, at, &bytes);
                 if n < 4 {
-                    put(&mut self.image, 2 * CLUSTER + n * RECORD, &bytes);
+                    put(
+                        &mut self.image,
+                        self.clusters / 2 * CLUSTER + n * RECORD,
+                        &bytes,
+                    );
                 }
             }
         }

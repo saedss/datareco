@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datareco_fs::{Entry, EntryId, FileSystem, FsError, FsKind, resolve};
@@ -24,11 +25,13 @@ impl From<FsError> for CliError {
     }
 }
 
-/// Which volume of a disk to open: a partition number, a byte offset, or
-/// (neither) the only one there is.
+/// Which volume of a disk to open: a partition number, a byte offset, a
+/// volume a saved scan found, or (none of them) the only one there is.
 pub struct VolumeChoice {
     pub partition: Option<u32>,
     pub offset: Option<u64>,
+    /// A saved scan (`datareco scan --save`) and a volume number from its list.
+    pub scan: Option<(PathBuf, usize)>,
 }
 
 fn readable(kind: FsKind) -> bool {
@@ -38,8 +41,21 @@ fn readable(kind: FsKind) -> bool {
     )
 }
 
-fn open_volume(source: &str, choice: &VolumeChoice) -> Result<Box<dyn FileSystem>, CliError> {
+pub fn open_volume(source: &str, choice: &VolumeChoice) -> Result<Box<dyn FileSystem>, CliError> {
     let disk = Arc::new(Disk::open(&SourceSpec::parse(source))?);
+    if let Some((path, number)) = &choice.scan {
+        let found = crate::scan::saved_results(&disk, source, path)?;
+        let volume = number
+            .checked_sub(1)
+            .and_then(|i| found.get(i))
+            .ok_or_else(|| {
+                CliError::Message(format!(
+                    "The scan found {} volumes; there's no volume {number}.",
+                    found.len()
+                ))
+            })?;
+        return Ok(datareco_scan::open_found(disk, volume)?);
+    }
     let offset = match (choice.offset, choice.partition) {
         (Some(offset), _) => offset,
         (None, Some(number)) => {
@@ -86,7 +102,7 @@ fn open_volume(source: &str, choice: &VolumeChoice) -> Result<Box<dyn FileSystem
     Ok(datareco_fs::open(disk, offset)?)
 }
 
-fn describe(fs: &dyn FileSystem) -> String {
+pub fn describe(fs: &dyn FileSystem) -> String {
     let info = fs.info();
     let label = info
         .label

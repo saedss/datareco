@@ -1,10 +1,11 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ByteData, CommandError, SourceInfo, TemplateList, api, toCommandError } from "../api";
+import { ByteData, CommandError, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
 import { FileBrowser } from "./FileBrowser";
 import { BYTES_PER_ROW, HexGrid, Range } from "./HexGrid";
 import { PartitionsPanel } from "./PartitionsPanel";
+import { ScanView } from "./ScanView";
 import { StructurePanel } from "./StructurePanel";
 
 type Props = {
@@ -16,10 +17,10 @@ type Props = {
   onRestartAsAdmin: () => void;
 };
 
-type View = "sectors" | "files";
+type View = "sectors" | "files" | "scan";
 
 /** The disk editor (view only): sectors as hex with navigation, search and
- *  structures, or the files on its volumes. */
+ *  structures; the files on its volumes; or a scan for lost volumes. */
 export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTemplates, onRestartAsAdmin }: Props) {
   const [info, setInfo] = useState<SourceInfo | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
@@ -31,13 +32,18 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
   const [status, setStatus] = useState<string | null>(null);
   const [tab, setTab] = useState<"structure" | "partitions" | "bookmarks">("structure");
   const [view, setView] = useState<View>("sectors");
-  // The file browser starts only when first shown (NTFS reads its whole MFT).
+  // The file browser and scan view start only when first shown (NTFS reads
+  // its whole MFT), then stay, so what they show survives switching views.
   const [filesOpened, setFilesOpened] = useState(false);
+  const [scanOpened, setScanOpened] = useState(false);
+  const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [browse, setBrowse] = useState<{ key: string; nonce: number } | null>(null);
   const latestRead = useRef(0);
 
   const showView = useCallback((next: View) => {
     setView(next);
     if (next === "files") setFilesOpened(true);
+    if (next === "scan") setScanOpened(true);
   }, []);
 
   useEffect(() => {
@@ -181,9 +187,29 @@ export function DiskEditor({ sourceId, title, subtitle, templates, onReloadTempl
               <FileBrowser
                 sourceId={info.id}
                 sectorSize={info.sectorSize}
+                scan={scan}
+                request={browse}
                 onShowInSectors={(offset, length) => {
                   setView("sectors");
                   reveal(offset, { start: offset, length: Math.max(1, Math.min(length, info.size - offset)) });
+                }}
+              />
+            </div>
+          )}
+          {scanOpened && (
+            <div className="view-pane" hidden={view !== "scan"}>
+              <ScanView
+                sourceId={info.id}
+                sectorSize={info.sectorSize}
+                status={scan}
+                onStatus={setScan}
+                onBrowse={(key) => {
+                  setBrowse((current) => ({ key, nonce: (current?.nonce ?? 0) + 1 }));
+                  showView("files");
+                }}
+                onShowInSectors={(offset) => {
+                  setView("sectors");
+                  reveal(offset, { start: offset, length: info.sectorSize });
                 }}
               />
             </div>
@@ -223,6 +249,10 @@ function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
             <button role="tab" aria-selected={view === "files"} onClick={() => onView("files")}>
               Files
             </button>
+            <button role="tab" aria-selected={view === "scan"} onClick={() => onView("scan")}>
+              Scan
+            </button>
+
           </div>
         )}
         {info && (

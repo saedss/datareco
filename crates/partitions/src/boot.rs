@@ -4,12 +4,12 @@
 //! the lost-partition search runs them over every sector of a disk.
 
 use datareco_io::{Disk, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bytes::{array16, bytes, has, text, u8_at, u16_at, u32_at, u32_be, u64_at};
 
 /// Kinds of file systems DataReco recognizes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FsKind {
     Ntfs,

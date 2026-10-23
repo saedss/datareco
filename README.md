@@ -3,11 +3,12 @@
 A disk editor and data recovery tool: browse and edit raw disk sectors, find lost
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT and more.
 
-> **Status: early development (Phase 4).** DataReco lists your disks and volumes,
+> **Status: early development (Phase 5).** DataReco lists your disks and volumes,
 > has a read-only disk editor (hex view, search, bookmarks, structure templates),
-> reads and checks MBR and GPT partition tables, finds lost partitions, and browses
-> NTFS, FAT and exFAT volumes, deleted files included. Scanning damaged volumes and
-> saving recovered files come next; see the [roadmap](docs/ROADMAP.md).
+> reads and checks MBR and GPT partition tables, finds lost partitions, browses
+> NTFS, FAT and exFAT volumes (deleted files included), scans disks for lost and
+> damaged volumes, and recovers files to another disk. Recovery by file signature
+> comes next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -32,7 +33,15 @@ when they run as administrator; image files work without. The desktop app offers
 - **Files** (top right) browses the NTFS, FAT and exFAT volumes on the disk:
   folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
-  **Show in sectors** jumps to where a file's data is.
+  **Show in sectors** jumps to where a file's data is. Tick files and folders and
+  **Recover selected…**, or **Recover everything…**, to save them to a folder on
+  another disk.
+- **Scan** (top right) looks for volumes, including lost and damaged ones. A
+  **quick scan** checks the partition table, where volumes usually start and the
+  backup boot sectors at the end; a **full scan** reads every sector and also finds
+  volumes whose boot sector, partition entry or FAT is gone, and NTFS files from
+  before a format. Scans can be paused, saved and carried on later. **Browse files**
+  opens a volume it found in the Files view.
 
 `datareco-gui --open disk0` starts on a given source.
 
@@ -53,7 +62,17 @@ datareco ls disk1 -p 2 -r              # every file on partition 2, deleted ones
 datareco ls E: Photos --deleted        # only what was deleted from E:\Photos
 datareco cat E: "Photos/beach.jpg" > D:\beach.jpg  # print a file (cmd or PowerShell 7)
 datareco cat E: notes.txt --stream Zone.Identifier  # an NTFS alternate data stream
+datareco recover E: Photos Documents --to D:\Recovered  # save folders to another disk
+datareco recover disk1 -p 2 --to D:\Recovered          # everything on partition 2
+datareco scan disk1 --full --save disk1.drscan         # find lost and damaged volumes
+datareco scan disk1 --resume disk1.drscan              # carry on after stopping it
+datareco ls disk1 --scan disk1.drscan --volume 2 -r    # look inside a volume it found
+datareco recover disk1 --scan disk1.drscan --volume 2 --to D:\Recovered
 ```
+
+Recovering saves each file with its times, and writes a log (what was saved, what
+couldn't be and why) and a SHA-256 checksum list next to the files.
+
 
 A source is `diskN`, a drive letter like `C:`, a volume path (`\\?\Volume{…}`),
 or an image file path.

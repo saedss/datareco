@@ -488,3 +488,44 @@ fn random_bytes_never_panic() {
     read_table(&disk).unwrap();
     Scan::run(&disk, ScanMode::Full, None).unwrap();
 }
+
+#[test]
+fn a_fed_search_can_be_saved_and_restored() {
+    let mut image = mbr_disk();
+    image.wipe(0);
+    let disk = image.disk();
+    let summary = |found: &[crate::FoundPartition]| -> Vec<(u64, u64, String)> {
+        found
+            .iter()
+            .map(|f| {
+                (
+                    f.start_lba,
+                    f.sectors,
+                    format!("{:?} {:?}", f.confidence, f.evidence),
+                )
+            })
+            .collect()
+    };
+    let expected = summary(&Scan::run(&disk, ScanMode::Full, None).unwrap());
+
+    // Fed in uneven chunks, saved halfway, restored and finished.
+    let chunk = 3000 * 512;
+    let mut scan = Scan::new(&disk, ScanMode::Full);
+    let mut offset = 0u64;
+    let mut saved = None;
+    while offset < disk.size() {
+        let len = chunk.min(disk.size() - offset);
+        let mut data = vec![0; usize::try_from(len).unwrap()];
+        disk.read_at(offset, &mut data).unwrap();
+        scan.feed(offset / 512, &data);
+        offset += len;
+        if saved.is_none() && offset > disk.size() / 2 {
+            saved = Some(scan.state());
+            let restored = Scan::restore(&disk, saved.as_ref().unwrap()).unwrap();
+            assert_eq!(restored.state(), scan.state());
+            scan = restored;
+        }
+    }
+    assert!(scan.finish(&disk).unwrap().done);
+    assert_eq!(summary(&scan.results(&disk, None).unwrap()), expected);
+}

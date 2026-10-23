@@ -1,15 +1,40 @@
 import { KeyboardEvent, useEffect, useMemo, useState } from "react";
-import { EntryId, Extent, FileEntry, FsVolumeInfo, VolumeChoice, api, toCommandError } from "../api";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  EntryId,
+  Extent,
+  FileEntry,
+  FoundVolume,
+  FsVolumeInfo,
+  RecoverProgress,
+  RecoverSummary,
+  ScanStatus,
+  VolumeChoice,
+  api,
+  toCommandError,
+} from "../api";
 import { formatNumber, formatSize, formatTime, hex } from "../format";
 
 type Props = {
   sourceId: string;
   sectorSize: number;
+  /** The latest scan: its volumes are offered next to the partition table's. */
+  scan: ScanStatus | null;
+  /** A volume to show, by key (from the scan view); `nonce` changes with each request. */
+  request: { key: string; nonce: number } | null;
   /** Shows a byte range of the source in the sector view. */
   onShowInSectors: (offset: number, length: number) => void;
 };
 
 type Folder = { id: EntryId; name: string };
+
+type Recovery = {
+  destination: string;
+  running: boolean;
+  progress: RecoverProgress | null;
+  summary: RecoverSummary | null;
+  error: string | null;
+};
 
 /** Bytes read for a text or hex preview. */
 const PREVIEW_BYTES = 64 * 1024;
@@ -25,16 +50,19 @@ const IMAGE_TYPES: Record<string, string> = {
   ico: "image/x-icon",
 };
 
-/** Browses the FAT, exFAT and NTFS volumes of a source, deleted files included. */
-export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
+/** Browses the FAT, exFAT and NTFS volumes of a source, deleted files
+ *  included, and saves files from them. */
+export function FileBrowser({ sourceId, sectorSize, scan, request, onShowInSectors }: Props) {
   const [volumes, setVolumes] = useState<VolumeChoice[] | null>(null);
-  const [volumeOffset, setVolumeOffset] = useState<number | null>(null);
+  const [volumeKey, setVolumeKey] = useState<string | null>(null);
   const [volume, setVolume] = useState<FsVolumeInfo | null>(null);
   const [path, setPath] = useState<Folder[]>([]);
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDeleted, setShowDeleted] = useState(true);
   const [selected, setSelected] = useState<FileEntry | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [recovery, setRecovery] = useState<Recovery | null>(null);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -43,19 +71,24 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
       .then((list) => {
         setVolumes(list);
         const first = list.find((v) => v.readable);
-        if (first) setVolumeOffset(first.offset);
+        if (first) setVolumeKey((current) => current ?? first.key);
       })
       .catch((e) => setError(toCommandError(e).message));
   }, [sourceId]);
 
   useEffect(() => {
-    if (volumeOffset === null) return;
+    if (request) setVolumeKey(request.key);
+  }, [request]);
+
+  useEffect(() => {
+    if (volumeKey === null) return;
     let cancelled = false;
     setVolume(null);
     setPath([]);
+    setEntries(null);
     setError(null);
     api
-      .openFileSystem(sourceId, volumeOffset)
+      .openFileSystem(sourceId, volumeKey)
       .then((opened) => {
         if (cancelled) return;
         setVolume(opened.info);
@@ -65,29 +98,34 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sourceId, volumeOffset]);
+  }, [sourceId, volumeKey]);
 
   const folder = path.length > 0 ? path[path.length - 1] : null;
   useEffect(() => {
-    if (!folder || volumeOffset === null) return;
+    if (!folder || volumeKey === null) return;
     let cancelled = false;
     setEntries(null);
     setSelected(null);
+    setChecked(new Set());
     setError(null);
     api
-      .listDirectory(sourceId, volumeOffset, folder.id)
+      .listDirectory(sourceId, volumeKey, folder.id)
       .then((list) => !cancelled && setEntries(list))
       .catch((e) => !cancelled && setError(toCommandError(e).message));
     return () => {
       cancelled = true;
     };
-  }, [sourceId, volumeOffset, folder, reload]);
+    // A new volume clears `path` first, so `folder` changing covers it.
+  }, [sourceId, folder, reload]);
 
   const shown = useMemo(
     () => (entries ?? []).filter((e) => showDeleted || !e.deleted).sort(compareEntries),
     [entries, showDeleted],
   );
   const deletedCount = entries?.filter((e) => e.deleted).length ?? 0;
+  const checkedEntries = shown.filter((e) => checked.has(entryKey(e)));
+  const scanVolumes = scan?.volumes ?? [];
+  const running = recovery?.running ?? false;
 
   function open(entry: FileEntry) {
     if (entry.isDir) setPath((current) => [...current, { id: entry.id, name: entry.name }]);
@@ -96,16 +134,55 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
   function onRowKey(event: KeyboardEvent, entry: FileEntry) {
     if (event.key === "Enter") open(entry);
     if (event.key === "Backspace" && path.length > 1) setPath((current) => current.slice(0, -1));
+    if (event.key === " ") {
+      event.preventDefault();
+      toggle(entry);
+    }
   }
 
-  if (volumes && !volumes.some((v) => v.readable)) {
+  function toggle(entry: FileEntry) {
+    setChecked((current) => {
+      const next = new Set(current);
+      const key = entryKey(entry);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setChecked(checkedEntries.length === shown.length ? new Set() : new Set(shown.map(entryKey)));
+  }
+
+  /** Saves `items` (null: everything on the volume) to a folder the user picks. */
+  async function recover(items: FileEntry[] | null) {
+    if (volumeKey === null) return;
+    const destination = await openDialog({
+      title: "Recover to a folder on another disk",
+      directory: true,
+      multiple: false,
+    });
+    if (typeof destination !== "string") return;
+    setRecovery({ destination, running: true, progress: null, summary: null, error: null });
+    try {
+      const summary = await api.recoverFiles(sourceId, volumeKey, items, destination, showDeleted, (progress) =>
+        setRecovery((r) => r && { ...r, progress }),
+      );
+      setRecovery((r) => r && { ...r, running: false, summary });
+    } catch (e) {
+      setRecovery((r) => r && { ...r, running: false, error: toCommandError(e).message });
+    }
+  }
+
+  const noReadable = volumes && !volumes.some((v) => v.readable) && scanVolumes.length === 0;
+  if (noReadable) {
     return (
       <div className="notice">
         <h2>No volume to browse</h2>
         <p>
           {volumes.length === 0
-            ? "No file system was found here. If the partition table is damaged, look for lost partitions in the sector view's Partitions tab."
-            : `DataReco reads FAT, exFAT and NTFS so far; this source has ${volumes.map((v) => v.name).join(", ")}.`}
+            ? "No file system was found in the partition table. A scan (Scan, at the top) looks for lost and damaged volumes."
+            : `DataReco reads FAT, exFAT and NTFS so far; this source has ${volumes.map((v) => v.name).join(", ")}. A scan may find others.`}
         </p>
       </div>
     );
@@ -116,26 +193,44 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
       <div className="toolbar">
         <label className="toolbar-group">
           <span className="toolbar-label">Volume</span>
-          <select
-            value={volumeOffset ?? ""}
-            onChange={(e) => setVolumeOffset(Number(e.target.value))}
-            disabled={!volumes}
-          >
+          <select value={volumeKey ?? ""} onChange={(e) => setVolumeKey(e.target.value)} disabled={!volumes}>
             {!volumes && <option value="">Reading the partition table…</option>}
-            {volumes?.map((v) => (
-              <option key={v.offset} value={v.offset} disabled={!v.readable}>
-                {volumeText(v)}
-              </option>
-            ))}
+            {volumeKey === null && volumes && <option value="">Pick a volume</option>}
+            {volumes && volumes.length > 0 && (
+              <optgroup label="Partition table">
+                {volumes.map((v) => (
+                  <option key={v.key} value={v.key} disabled={!v.readable}>
+                    {volumeText(v)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {scanVolumes.length > 0 && scan && (
+              <optgroup label="Found by the scan">
+                {scanVolumes.map((v, i) => (
+                  <option key={i} value={`scan:${scan.generation}:${i}`}>
+                    {foundText(v, i)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
-        <label className="checkbox">
+        <label className="checkbox" title="Deleted files are listed, and recovered from inside folders">
           <input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} />
           Show deleted
         </label>
         <button onClick={() => setReload((n) => n + 1)} disabled={!folder}>
           Reload
         </button>
+        <div className="toolbar-group recover-buttons">
+          <button className="primary" disabled={checkedEntries.length === 0 || running} onClick={() => recover(checkedEntries)}>
+            Recover {checkedEntries.length > 0 ? `${formatNumber(checkedEntries.length)} ` : ""}selected…
+          </button>
+          <button disabled={!volume || running} onClick={() => recover(null)} title="Everything on the volume, but NTFS's own system files">
+            Recover everything…
+          </button>
+        </div>
       </div>
 
       <nav className="breadcrumbs" aria-label="Folder">
@@ -156,6 +251,10 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
         ))}
       </nav>
 
+      {recovery && (
+        <RecoveryBar recovery={recovery} onStop={() => api.stopRecovery(sourceId)} onClose={() => setRecovery(null)} />
+      )}
+
       {error && (
         <div className="banner error" role="alert">
           {error}
@@ -175,6 +274,14 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
             <table className="file-table">
               <thead>
                 <tr>
+                  <th className="check">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all"
+                      checked={shown.length > 0 && checkedEntries.length === shown.length}
+                      onChange={toggleAll}
+                    />
+                  </th>
                   <th>Name</th>
                   <th className="number">Size</th>
                   <th>Modified</th>
@@ -184,7 +291,7 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
               <tbody>
                 {shown.map((entry) => (
                   <tr
-                    key={`${JSON.stringify(entry.id)}-${entry.name}`}
+                    key={entryKey(entry)}
                     tabIndex={0}
                     className={[
                       entry.deleted ? "deleted" : "",
@@ -195,6 +302,14 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
                     onKeyDown={(e) => onRowKey(e, entry)}
                     onFocus={() => setSelected(entry)}
                   >
+                    <td className="check" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${entry.name}`}
+                        checked={checked.has(entryKey(entry))}
+                        onChange={() => toggle(entry)}
+                      />
+                    </td>
                     <td className="file-name">
                       <span className="file-icon" aria-hidden>
                         {entry.isDir ? "📁" : "📄"}
@@ -213,25 +328,30 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
             <p className="muted small file-list-status">
               {formatNumber(shown.length)} item{shown.length === 1 ? "" : "s"}
               {deletedCount > 0 && ` · ${formatNumber(deletedCount)} deleted${showDeleted ? "" : " (hidden)"}`}
+              {checkedEntries.length > 0 && ` · ${formatNumber(checkedEntries.length)} selected`}
             </p>
           )}
         </div>
 
         <aside className="side-panel file-details">
-          {selected && volume && volumeOffset !== null ? (
+          {selected && volume && volumeKey !== null ? (
             <FileDetails
-              key={`${JSON.stringify(selected.id)}-${selected.name}`}
+              key={entryKey(selected)}
               sourceId={sourceId}
-              volumeOffset={volumeOffset}
+              volumeKey={volumeKey}
               volume={volume}
               sectorSize={sectorSize}
               entry={selected}
+              recovering={running}
               onOpen={() => open(selected)}
+              onRecover={() => recover([selected])}
               onShowInSectors={onShowInSectors}
             />
           ) : (
             <p className="muted panel-section">
-              {volume ? `${volume.name}${volume.label ? ` "${volume.label}"` : ""}, ${formatSize(volume.size)}, cluster size ${formatSize(volume.clusterSize)}. Select a file to see its details.` : "Opening the volume…"}
+              {volume
+                ? `${volume.name}${volume.label ? ` "${volume.label}"` : ""}, ${formatSize(volume.size)}, cluster size ${formatSize(volume.clusterSize)}. Select a file to see its details; tick files and folders to recover them.`
+                : "Opening the volume…"}
             </p>
           )}
         </aside>
@@ -240,13 +360,50 @@ export function FileBrowser({ sourceId, sectorSize, onShowInSectors }: Props) {
   );
 }
 
+function RecoveryBar({ recovery, onStop, onClose }: { recovery: Recovery; onStop: () => void; onClose: () => void }) {
+  const p = recovery.summary?.progress ?? recovery.progress;
+  const counts = p ? `${counted(p.files, p.folders)} (${formatSize(p.bytes)})` : "";
+  if (recovery.running) {
+    return (
+      <div className="recovery-bar" role="status">
+        <span>
+          Saving to {recovery.destination}… {counts}
+        </span>
+        <span className="muted small recovery-current">{p?.current}</span>
+        <button onClick={onStop}>Stop</button>
+      </div>
+    );
+  }
+  if (recovery.error) {
+    return (
+      <div className="recovery-bar error" role="alert">
+        <span>{recovery.error}</span>
+        <button onClick={onClose}>Close</button>
+      </div>
+    );
+  }
+  const problems = p && (p.incomplete > 0 || p.failed > 0);
+  return (
+    <div className={problems ? "recovery-bar warning" : "recovery-bar done"} role="status">
+      <span>
+        Saved {counts} to {recovery.destination}.
+        {problems && ` ${p.incomplete} saved only in part and ${p.failed} not saved: the log says which and why.`}
+      </span>
+      <button onClick={() => api.showFolder(recovery.destination)}>Show folder</button>
+      <button onClick={onClose}>Close</button>
+    </div>
+  );
+}
+
 type DetailsProps = {
   sourceId: string;
-  volumeOffset: number;
+  volumeKey: string;
   volume: FsVolumeInfo;
   sectorSize: number;
   entry: FileEntry;
+  recovering: boolean;
   onOpen: () => void;
+  onRecover: () => void;
   onShowInSectors: (offset: number, length: number) => void;
 };
 
@@ -255,7 +412,7 @@ type Preview =
   | { kind: "text"; text: string; truncated: boolean }
   | { kind: "hex"; bytes: Uint8Array };
 
-function FileDetails({ sourceId, volumeOffset, volume, sectorSize, entry, onOpen, onShowInSectors }: DetailsProps) {
+function FileDetails({ sourceId, volumeKey, volume, sectorSize, entry, recovering, onOpen, onRecover, onShowInSectors }: DetailsProps) {
   const [stream, setStream] = useState<string | null>(null);
   const [extents, setExtents] = useState<Extent[] | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -271,13 +428,13 @@ function FileDetails({ sourceId, volumeOffset, volume, sectorSize, entry, onOpen
     setPreview(null);
     setProblem(null);
     api
-      .fileExtents(sourceId, volumeOffset, entry.id, stream)
+      .fileExtents(sourceId, volumeKey, entry.id, stream)
       .then((list) => !cancelled && setExtents(list))
       .catch(() => !cancelled && setExtents([]));
     const imageType = stream === null ? IMAGE_TYPES[extension(entry.name)] : undefined;
     const wanted = imageType && size <= MAX_IMAGE_BYTES ? size : Math.min(size, PREVIEW_BYTES);
     api
-      .readFile(sourceId, volumeOffset, entry.id, stream, 0, wanted)
+      .readFile(sourceId, volumeKey, entry.id, stream, 0, wanted)
       .then((buffer) => {
         if (cancelled) return;
         const bytes = new Uint8Array(buffer);
@@ -293,7 +450,7 @@ function FileDetails({ sourceId, volumeOffset, volume, sectorSize, entry, onOpen
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [sourceId, volumeOffset, entry, stream, size]);
+  }, [sourceId, volumeKey, entry, stream, size]);
 
   const stored = extents?.filter((e) => !e.sparse) ?? [];
   const first = stored[0];
@@ -340,11 +497,12 @@ function FileDetails({ sourceId, volumeOffset, volume, sectorSize, entry, onOpen
             </>
           )}
         </dl>
-        {entry.isDir && (
-          <div className="button-row">
-            <button onClick={onOpen}>Open folder</button>
-          </div>
-        )}
+        <div className="button-row">
+          {entry.isDir && <button onClick={onOpen}>Open folder</button>}
+          <button disabled={recovering} onClick={onRecover}>
+            Recover…
+          </button>
+        </div>
       </section>
 
       {entry.streams.length > 0 && (
@@ -407,6 +565,25 @@ function FileDetails({ sourceId, volumeOffset, volume, sectorSize, entry, onOpen
       )}
     </div>
   );
+}
+
+function foundText(v: FoundVolume, i: number): string {
+  const label = v.label ? ` "${v.label}"` : "";
+  const how = v.state === "intact" ? "" : v.state === "fromBackup" ? " (from backup boot sector)" : " (rebuilt)";
+  return `${i + 1}. ${v.name}${label} at byte ${formatNumber(v.offset)} · ${formatSize(v.size)}${how}`;
+}
+
+/** "3 files and 1 folder", "1 file", "2 folders", "nothing". */
+function counted(files: number, folders: number): string {
+  const one = (n: number, what: string) => `${formatNumber(n)} ${what}${n === 1 ? "" : "s"}`;
+  if (files === 0 && folders === 0) return "nothing";
+  if (folders === 0) return one(files, "file");
+  if (files === 0) return one(folders, "folder");
+  return `${one(files, "file")} and ${one(folders, "folder")}`;
+}
+
+function entryKey(entry: FileEntry): string {
+  return `${JSON.stringify(entry.id)}/${entry.name}`;
 }
 
 function volumeText(v: VolumeChoice): string {

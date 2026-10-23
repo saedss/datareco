@@ -1,7 +1,7 @@
 // Typed wrappers around the Rust commands in src-tauri/src/main.rs.
 // Field names mirror the Rust structs (camelCase on the wire).
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type AppInfo = {
   name: string;
@@ -129,6 +129,8 @@ export type FsKind = "ntfs" | "fat12" | "fat16" | "fat32" | "exfat" | "ext2" | "
 
 /** A volume the file browser can offer (see src-tauri/src/files.rs). */
 export type VolumeChoice = {
+  /** What the file commands call it: `at:<offset>`, or `scan:…` for a scan's volume. */
+  key: string;
   offset: number;
   partition: number | null;
   kind: FsKind;
@@ -152,7 +154,8 @@ export type EntryId =
   | { kind: "clusters"; cluster: number; length: number; chain: boolean }
   | { kind: "fixedRoot" }
   | { kind: "record"; number: number }
-  | { kind: "orphans" };
+  | { kind: "orphans" }
+  | { kind: "lostFolder"; number: number };
 
 export type OpenedVolume = { info: FsVolumeInfo; root: EntryId };
 
@@ -177,8 +180,69 @@ export type FileEntry = {
 /** Where part of a file is: a byte offset on the source, or nowhere (sparse). */
 export type Extent = { offset: number; length: number; sparse: boolean };
 
+export type ScanProgress = {
+  mode: ScanMode;
+  position: number;
+  total: number;
+  done: boolean;
+  volumeClues: number;
+  mftRecords: number;
+  folders: number;
+};
+
+/** How a found volume opens (see crates/scan). */
+export type VolumeState = "intact" | "fromBackup" | "rebuilt";
+
+export type FoundVolume = {
+  kind: FsKind;
+  name: string;
+  label: string | null;
+  offset: number;
+  size: number;
+  state: VolumeState;
+  /** 0-100: how much of the volume's own structure is there. */
+  score: number;
+  inTable: boolean;
+  /** MFT records (NTFS) or folder sectors (FAT) the scan found in it. */
+  found: number | null;
+  evidence: string[];
+};
+
+export type ScanStatus = {
+  progress: ScanProgress;
+  /** Volume keys of this scan are `scan:<generation>:<index>`. */
+  generation: number;
+  volumes: FoundVolume[] | null;
+};
+
+export type RecoverProgress = {
+  files: number;
+  folders: number;
+  bytes: number;
+  incomplete: number;
+  failed: number;
+  current: string;
+};
+
+export type RecoverSummary = {
+  progress: RecoverProgress;
+  destination: string;
+  log: string;
+  checksums: string;
+};
+
 export type CommandError = {
-  kind: "access_denied" | "not_found" | "out_of_range" | "unsupported" | "io" | "template" | "damaged";
+  kind:
+    | "access_denied"
+    | "not_found"
+    | "out_of_range"
+    | "unsupported"
+    | "io"
+    | "template"
+    | "damaged"
+    | "destination"
+    | "stopped"
+    | "saved_scan";
   message: string;
 };
 
@@ -205,15 +269,38 @@ export const api = {
   continuePartitionSearch: (id: string) => invoke<SearchStatus>("continue_partition_search", { id }),
   stopPartitionSearch: (id: string) => invoke<void>("stop_partition_search", { id }),
   listVolumes: (id: string) => invoke<VolumeChoice[]>("list_volumes", { id }),
-  openFileSystem: (id: string, offset: number) => invoke<OpenedVolume>("open_file_system", { id, offset }),
+  openFileSystem: (id: string, volume: string) => invoke<OpenedVolume>("open_file_system", { id, volume }),
   /** A folder's entries, deleted ones included. */
-  listDirectory: (id: string, offset: number, dir: EntryId) =>
-    invoke<FileEntry[]>("list_directory", { id, offset, dir }),
+  listDirectory: (id: string, volume: string, dir: EntryId) =>
+    invoke<FileEntry[]>("list_directory", { id, volume, dir }),
   /** Up to `length` bytes (at most 16 MiB) of a file or NTFS stream, from `start`. */
-  readFile: (id: string, offset: number, file: EntryId, stream: string | null, start: number, length: number) =>
-    invoke<ArrayBuffer>("read_file", { id, offset, file, stream, start, length }),
-  fileExtents: (id: string, offset: number, file: EntryId, stream: string | null) =>
-    invoke<Extent[]>("file_extents", { id, offset, file, stream }),
+  readFile: (id: string, volume: string, file: EntryId, stream: string | null, start: number, length: number) =>
+    invoke<ArrayBuffer>("read_file", { id, volume, file, stream, start, length }),
+  fileExtents: (id: string, volume: string, file: EntryId, stream: string | null) =>
+    invoke<Extent[]>("file_extents", { id, volume, file, stream }),
+  /** Saves `items` (null: everything but NTFS system files) into `destination`. */
+  recoverFiles: (
+    id: string,
+    volume: string,
+    items: FileEntry[] | null,
+    destination: string,
+    deleted: boolean,
+    onProgress: (progress: RecoverProgress) => void,
+  ) => {
+    const progress = new Channel<RecoverProgress>();
+    progress.onmessage = onProgress;
+    return invoke<RecoverSummary>("recover_files", { id, volume, items, destination, deleted, progress });
+  },
+  stopRecovery: (id: string) => invoke<void>("stop_recovery", { id }),
+  showFolder: (path: string) => invoke<void>("show_folder", { path }),
+  /** Starts a scan for volumes (replacing an earlier one) and runs its first step. */
+  startScan: (id: string, mode: ScanMode) => invoke<ScanStatus>("start_scan", { id, mode }),
+  continueScan: (id: string) => invoke<ScanStatus>("continue_scan", { id }),
+  /** What a (paused) scan has found so far. */
+  scanResults: (id: string) => invoke<ScanStatus>("scan_results", { id }),
+  saveScan: (id: string, path: string) => invoke<void>("save_scan", { id, path }),
+  openSavedScan: (id: string, path: string) => invoke<ScanStatus>("open_saved_scan", { id, path }),
+
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),
 };

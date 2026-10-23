@@ -7,6 +7,11 @@
 //!
 //! Everything only reads, and disk data is untrusted: parsers use
 //! bounds-checked reads and report damage as errors, never panics.
+//!
+//! Damaged volumes: [`open_rebuilt`] opens one from what a scan of the disk
+//! found ([`Rebuild`]): a backup boot sector, MFT records found elsewhere,
+//! or a FAT volume's layout worked out from its folders. The [`clues`]
+//! module says what a sector shows, for such a scan.
 
 mod bytes;
 mod clusters;
@@ -23,11 +28,14 @@ mod tests_exfat;
 mod tests_fat;
 #[cfg(test)]
 mod tests_ntfs;
+#[cfg(test)]
+mod tests_rebuild;
 /// Builders for small in-memory FAT, exFAT and NTFS volumes, for tests.
 #[cfg(any(test, feature = "testutil"))]
 #[doc(hidden)]
 pub mod testutil;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datareco_io::Disk;
@@ -35,8 +43,12 @@ pub use datareco_partitions::FsKind;
 use serde::{Deserialize, Serialize};
 
 pub use error::FsError;
+pub use fat::{FatLayout, FatRoot};
 
 use crate::volume::Volume;
+
+/// The virtual folder listing files whose folder is gone.
+pub(crate) const LOST_FILES: &str = "Lost files";
 
 /// Identifies a file or folder within one file system. It round-trips
 /// through JSON, so the desktop app can hand it back.
@@ -56,8 +68,10 @@ pub enum EntryId {
     FixedRoot,
     /// An NTFS MFT record.
     Record { number: u64 },
-    /// NTFS files whose folder no longer exists.
+    /// "Lost files": files and folders whose folder no longer exists.
     Orphans,
+    /// NTFS: a folder whose own record is gone, standing for what's in it.
+    LostFolder { number: u64 },
 }
 
 /// Windows file attribute bits, as `Entry::attributes` uses them.
@@ -73,14 +87,15 @@ pub mod attributes {
 }
 
 /// A named data stream of a file (NTFS alternate data streams).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamInfo {
     pub name: String,
     pub size: u64,
 }
 
-/// A file or folder in a listing.
-#[derive(Clone, Debug, Serialize)]
+/// A file or folder in a listing. The desktop app hands entries back to
+/// recover them.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub id: EntryId,
@@ -167,6 +182,72 @@ pub fn open(disk: Arc<Disk>, offset: u64) -> Result<Box<dyn FileSystem>, FsError
             other.name()
         ))),
     }
+}
+
+/// What a scan found that helps open a damaged volume.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rebuild {
+    /// A boot sector to use instead of the one at the volume's start, by its
+    /// byte offset on the disk: a backup copy (NTFS keeps one at the end,
+    /// FAT32 in sector 6, exFAT in sector 12).
+    pub boot_sector: Option<u64>,
+    /// NTFS: MFT records found on the disk, record number → byte offset on
+    /// the disk. They stand in for records the MFT has no readable copy of.
+    pub mft_records: BTreeMap<u64, u64>,
+    /// FAT without a boot sector: where its clusters are.
+    pub fat: Option<FatLayout>,
+}
+
+/// Opens a `kind` file system at byte `offset` of `disk`, `size` bytes long,
+/// with help from what a scan found.
+pub fn open_rebuilt(
+    disk: Arc<Disk>,
+    kind: FsKind,
+    offset: u64,
+    size: u64,
+    rebuild: &Rebuild,
+) -> Result<Box<dyn FileSystem>, FsError> {
+    let boot = match rebuild.boot_sector {
+        Some(at) => {
+            let mut sector = vec![0; 512];
+            disk.read_at(at, &mut sector)?;
+            Some(sector)
+        }
+        None => None,
+    };
+    let volume = Volume::new(disk, offset, size);
+    match kind {
+        FsKind::Ntfs => {
+            let end = offset.saturating_add(volume.size());
+            let found = rebuild
+                .mft_records
+                .iter()
+                .filter(|&(_, &at)| at >= offset && at < end)
+                .map(|(&number, &at)| (number, at - offset))
+                .collect();
+            Ok(Box::new(ntfs::Ntfs::open_with(
+                volume,
+                ntfs::Options { boot, found },
+            )?))
+        }
+        FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 => match (&rebuild.fat, boot) {
+            (Some(layout), _) => Ok(Box::new(fat::Fat::rebuilt(volume, layout)?)),
+            (None, Some(boot)) => Ok(Box::new(fat::Fat::open_with_boot(volume, &boot)?)),
+            (None, None) => Ok(Box::new(fat::Fat::open(volume)?)),
+        },
+        FsKind::Exfat => Ok(Box::new(exfat::Exfat::open_with_boot(volume, boot)?)),
+        other => Err(FsError::Unsupported(format!(
+            "Reading {} volumes isn't supported yet.",
+            other.name()
+        ))),
+    }
+}
+
+/// What one sector shows about where a file system's pieces are, for a
+/// scan of a whole disk.
+pub mod clues {
+    pub use crate::fat::{FolderSector, folder_sector, table_start as fat_table_start};
+    pub use crate::ntfs::record::{MftRecord, mft_record};
 }
 
 /// Reads a whole file or stream, up to `limit` bytes.

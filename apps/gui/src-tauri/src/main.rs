@@ -5,6 +5,7 @@
 
 mod files;
 mod partitions;
+mod scans;
 mod structures;
 
 use std::collections::HashMap;
@@ -202,6 +203,8 @@ fn main() {
         .manage(OpenSources::default())
         .manage(partitions::Searches::default())
         .manage(files::FileSystems::default())
+        .manage(files::Recoveries::default())
+        .manage(scans::Scans::default())
         .setup(|app| {
             let folder = app.path().app_config_dir()?.join("templates");
             app.manage(Templates::load(folder));
@@ -228,6 +231,14 @@ fn main() {
             files::list_directory,
             files::read_file,
             files::file_extents,
+            files::recover_files,
+            files::stop_recovery,
+            files::show_folder,
+            scans::start_scan,
+            scans::continue_scan,
+            scans::scan_results,
+            scans::save_scan,
+            scans::open_saved_scan,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");
