@@ -1,15 +1,14 @@
 //! Scans of damaged disks built in memory, and recovery from them.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datareco_fs::testutil::{
     FatBuilder, NTFS_CLUSTER, NTFS_ROOT, NtfsBuilder, STAMP, disk, noise, text,
 };
 use datareco_fs::{Entry, FileSystem, FsKind, read_to_end, resolve};
-use datareco_io::{DeviceList, DiskExtent, SourceSpec, VolumeInfo};
 
-use crate::recover::{disks_of_path, disks_of_source, safe_name};
+use crate::recover::safe_name;
 use crate::{
     Control, FoundVolume, RecoverOptions, SavedScan, Scan, ScanMode, VolumeState, open_found,
     recover,
@@ -328,42 +327,6 @@ fn names_are_made_safe_for_windows() {
     assert_eq!(safe_name("computer.txt"), "computer.txt");
     assert_eq!(safe_name(""), "_");
     assert_eq!(safe_name("?EADME.TXT"), "_EADME.TXT");
-}
-
-#[test]
-fn destinations_on_the_source_disk_are_found() {
-    let volume = |path: &str, mounts: &[&str], disk: u32| VolumeInfo {
-        path: path.to_owned(),
-        mount_points: mounts.iter().map(|m| (*m).to_owned()).collect(),
-        label: None,
-        file_system: Some("NTFS".to_owned()),
-        size: Some(1 << 30),
-        extents: vec![DiskExtent {
-            disk,
-            offset: 1 << 20,
-            length: 1 << 30,
-        }],
-    };
-    let devices = DeviceList {
-        disks: Vec::new(),
-        volumes: vec![
-            volume(r"\\?\Volume{c}", &["C:\\"], 0),
-            volume(r"\\?\Volume{d}", &["D:\\"], 1),
-            volume(r"\\?\Volume{m}", &["C:\\Mounted\\"], 2),
-        ],
-    };
-    assert_eq!(disks_of_path(r"C:\Users\me\Recovered", &devices), [0]);
-    assert_eq!(disks_of_path(r"c:\mounted\files", &devices), [2]);
-    assert_eq!(disks_of_path(r"D:\", &devices), [1]);
-    assert!(disks_of_path(r"\\server\share", &devices).is_empty());
-    assert_eq!(disks_of_source(&SourceSpec::PhysicalDisk(1), &devices), [1]);
-    assert_eq!(
-        disks_of_source(&SourceSpec::Volume("D:".to_owned()), &devices),
-        [1]
-    );
-    assert!(
-        disks_of_source(&SourceSpec::Image(Path::new("x.img").to_owned()), &devices).is_empty()
-    );
 }
 
 mod raw {

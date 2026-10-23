@@ -13,7 +13,10 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 - **Read-only by default.** Nothing is written to a source disk unless the user turns
   on write mode and confirms.
 - **Never recover onto the source.** Recovered files can't be saved to the disk being
-  recovered, because that would overwrite the data being recovered.
+  recovered, because that would overwrite the data being recovered. Neither can
+  image and map files when copying.
+- **Copies only write where the user said.** A new image file, or a disk the user
+  confirmed by typing its name; never the source disk or the disk Windows runs from.
 - **Damaged disks are untrusted input.** Parsers must never panic or crash on corrupted
   data, and are fuzz-tested. Use `get()` instead of indexing, and checked arithmetic
   on any number read from disk.
@@ -37,7 +40,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 4 | NTFS, FAT, exFAT | Browse folders and read files, including deleted ones. NTFS: compressed and sparse files, alternate data streams, orphaned files. FAT/exFAT: deleted entries, long names, guessing where a deleted file's data was | Every live file in the test images reads back with the right hash; deleted ones are listed | Done |
 | 5 | Scanning and recovery | Quick scan; full scan that rebuilds lost volumes ranked by quality; pause/resume and saved scans; preview; recover files and folders with timestamps, a log and checksums | Files from `ntfs-reformatted` and `fat32-no-fat` are recovered | Done (`ntfs-reformatted` by raw recovery, see the note) |
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
-| 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | |
+| 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
 | 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | |
 | 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
 | 10 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
@@ -49,6 +52,12 @@ FAT32 tables overwrite, so its file records are gone. Its files come back by the
 contents with raw recovery (Phase 6), which the image tests check. On real disks the
 MFT sits far from the start, and a full scan recovers files after such a format,
 names and folders included (tested on volumes built in memory).
+
+Note on Phase 7: copies with simulated bad and flaky sectors, stopped and carried
+on through every pass, are tested in memory, and copies into image files are
+tested end to end. Writing onto a real disk (locking and dismounting its volumes,
+writing straight to the drive) needs administrator rights and a spare disk, so it
+hasn't been run yet; the safety checks in front of it are tested.
 
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete

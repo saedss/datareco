@@ -2,7 +2,8 @@
 //!
 //! Devices are opened with no access rights to query them (no administrator
 //! rights needed), and with read access only to read them. Write access is
-//! never requested.
+//! only requested by [`open_disk_for_writing`], for a disk that passed
+//! `check_disk_target` and was confirmed by name.
 
 use std::ffi::{OsStr, c_void};
 use std::fs::File;
@@ -13,20 +14,24 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_DEV_NOT_EXIST, ERROR_DEVICE_NOT_CONNECTED, ERROR_DEVICE_REMOVED,
+    ERROR_NO_SUCH_DEVICE, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::{
     GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW,
-    FindVolumeClose, GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNamesForVolumeNameW,
-    OPEN_EXISTING,
+    CreateFileW, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH, FILE_FLAGS_AND_ATTRIBUTES,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
+    GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
     DISK_EXTENT, DISK_GEOMETRY, DISK_GEOMETRY_EX, FSCTL_ALLOW_EXTENDED_DASD_IO,
-    GET_LENGTH_INFORMATION, IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
-    IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery,
+    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_SET_SPARSE, GET_LENGTH_INFORMATION,
+    IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_LENGTH_INFO,
+    IOCTL_DISK_UPDATE_PROPERTIES, IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery,
     STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_DEVICE_DESCRIPTOR, StorageAccessAlignmentProperty,
     StorageDeviceProperty, VOLUME_DISK_EXTENTS,
 };
@@ -35,10 +40,10 @@ use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::devices::{DeviceList, DiskExtent, PhysicalDiskInfo, VolumeInfo};
-use crate::disk::Disk;
 use crate::error::{Error, Result};
 use crate::source::FileSource;
 use crate::spec::SourceSpec;
+use crate::target::OpenedDisk;
 
 /// Physical disk numbers to probe. Windows numbers disks from 0 and rarely
 /// leaves gaps.
@@ -50,15 +55,14 @@ const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x0056_0000;
 
 // ---------------------------------------------------------------- opening
 
-pub(crate) fn open_physical_disk(number: u32) -> Result<Disk> {
+pub(crate) fn open_physical_disk(number: u32) -> Result<FileSource> {
     let name = SourceSpec::PhysicalDisk(number).display_name();
     let file = open_device(&disk_path(number), true).map_err(|e| Error::from_io(&name, e))?;
     let (geometry, size) = disk_geometry(&file).map_err(|e| Error::from_io(&name, e))?;
-    let source = FileSource::from_device(file, size, geometry.BytesPerSector);
-    Ok(Disk::new(name, Box::new(source)))
+    Ok(FileSource::from_device(file, size, geometry.BytesPerSector))
 }
 
-pub(crate) fn open_volume(path: &str) -> Result<Disk> {
+pub(crate) fn open_volume(path: &str) -> Result<FileSource> {
     let name = SourceSpec::Volume(path.to_owned()).display_name();
     let file =
         open_device(&volume_device_path(path), true).map_err(|e| Error::from_io(&name, e))?;
@@ -68,8 +72,7 @@ pub(crate) fn open_volume(path: &str) -> Result<Disk> {
     let _ = ioctl(&file, FSCTL_ALLOW_EXTENDED_DASD_IO, &[], &mut []);
     let size = volume_length(&file).map_err(|e| Error::from_io(&name, e))?;
     let sector_size = volume_sector_size(&file).unwrap_or(512);
-    let source = FileSource::from_device(file, size, sector_size);
-    Ok(Disk::new(name, Box::new(source)))
+    Ok(FileSource::from_device(file, size, sector_size))
 }
 
 fn disk_path(number: u32) -> String {
@@ -89,8 +92,12 @@ fn volume_device_path(path: &str) -> String {
 /// Opens a device. `read: false` asks for no access at all, which is enough
 /// for queries and needs no administrator rights.
 fn open_device(path: &str, read: bool) -> io::Result<File> {
-    let wide = to_wide(path);
     let access = if read { GENERIC_READ } else { 0 };
+    create_file(path, access, 0)
+}
+
+fn create_file(path: &str, access: u32, flags: FILE_FLAGS_AND_ATTRIBUTES) -> io::Result<File> {
+    let wide = to_wide(path);
     // SAFETY: `wide` is NUL-terminated and outlives the call; null security
     // attributes and template handle are allowed.
     let handle = unsafe {
@@ -100,7 +107,7 @@ fn open_device(path: &str, read: bool) -> io::Result<File> {
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             ptr::null(),
             OPEN_EXISTING,
-            0,
+            flags,
             ptr::null_mut(),
         )
     };
@@ -109,6 +116,71 @@ fn open_device(path: &str, read: bool) -> io::Result<File> {
     }
     // SAFETY: `handle` is a valid handle that we own; the File closes it.
     Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+// ---------------------------------------------------------------- writing
+
+/// Locks and dismounts each volume, so neither Windows nor any program
+/// uses them while the disk is written, then opens the disk for writing
+/// straight to the drive. The locks last until the returned handles close.
+pub(crate) fn open_disk_for_writing(number: u32, volumes: &[String]) -> Result<OpenedDisk> {
+    let name = SourceSpec::PhysicalDisk(number).display_name();
+    let mut locks = Vec::new();
+    for volume in volumes {
+        let volume_name = SourceSpec::Volume(volume.clone()).display_name();
+        let file = create_file(volume, GENERIC_READ | GENERIC_WRITE, 0)
+            .map_err(|e| Error::from_io(&volume_name, e))?;
+        if ioctl(&file, FSCTL_LOCK_VOLUME, &[], &mut []).is_err() {
+            return Err(Error::Refused {
+                reason: format!(
+                    "{volume_name} on {name} is in use. Close the programs and windows using \
+                     it, then try again."
+                ),
+            });
+        }
+        ioctl(&file, FSCTL_DISMOUNT_VOLUME, &[], &mut [])
+            .map_err(|e| Error::from_io(&volume_name, e))?;
+        locks.push(file);
+    }
+    let file = create_file(
+        &disk_path(number),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
+    )
+    .map_err(|e| Error::from_io(&name, e))?;
+    let (geometry, size) = disk_geometry(&file).map_err(|e| Error::from_io(&name, e))?;
+    Ok(OpenedDisk {
+        file,
+        locks,
+        size,
+        sector_size: geometry.BytesPerSector,
+    })
+}
+
+/// Asks Windows to read the disk's partition table again.
+pub(crate) fn update_disk_properties(file: &File) {
+    let _ = ioctl(file, IOCTL_DISK_UPDATE_PROPERTIES, &[], &mut []);
+}
+
+/// Marks a new file sparse, so parts never written take no space.
+pub(crate) fn make_sparse(file: &File) -> io::Result<()> {
+    ioctl(file, FSCTL_SET_SPARSE, &[], &mut []).map(|_| ())
+}
+
+/// Whether a read failed because the device is gone (unplugged), rather
+/// than because of the sectors read.
+pub(crate) fn is_device_gone(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        u32::try_from(code).is_ok_and(|code| {
+            [
+                ERROR_DEV_NOT_EXIST,
+                ERROR_DEVICE_NOT_CONNECTED,
+                ERROR_DEVICE_REMOVED,
+                ERROR_NO_SUCH_DEVICE,
+            ]
+            .contains(&code)
+        })
+    })
 }
 
 // ---------------------------------------------------------------- listing

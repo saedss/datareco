@@ -64,6 +64,10 @@ function App() {
   async function openImage() {
     const path = await open({ title: "Open disk image", multiple: false, directory: false, filters: IMAGE_FILTERS });
     if (typeof path !== "string") return;
+    showImage(path);
+  }
+
+  function showImage(path: string) {
     setImages((current) => (current.includes(path) ? current : [...current, path]));
     setSelection(imageSelection(path));
   }
@@ -97,12 +101,16 @@ function App() {
             templates={templates}
             onReloadTemplates={reloadTemplates}
             onRestartAsAdmin={restartAsAdmin}
+            onOpenImage={showImage}
           />
         ) : (
           <div className="welcome">
             <h1>DataReco</h1>
             <p>Pick a disk, volume or image file to look inside it.</p>
-            <span className="badge" title="Nothing is ever written to your disks in this mode">
+            <span
+              className="badge"
+              title="DataReco never writes to the disks you look at. Copying onto another disk asks you to type its name first."
+            >
               Read-only mode
             </span>
           </div>

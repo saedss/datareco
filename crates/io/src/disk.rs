@@ -74,15 +74,8 @@ struct Block {
 impl Disk {
     /// Opens a physical disk, volume or image file, read-only.
     pub fn open(spec: &SourceSpec) -> Result<Disk> {
-        match spec {
-            SourceSpec::Image(path) => {
-                let name = spec.display_name();
-                let source = FileSource::open_image(path).map_err(|e| Error::from_io(&name, e))?;
-                Ok(Disk::new(name, Box::new(source)))
-            }
-            SourceSpec::PhysicalDisk(number) => crate::platform::open_physical_disk(*number),
-            SourceSpec::Volume(path) => crate::platform::open_volume(path),
-        }
+        let source = FileSource::open(spec)?;
+        Ok(Disk::new(spec.display_name(), Box::new(source)))
     }
 
     /// Wraps any sector source. `name` is used in errors and the UI.
