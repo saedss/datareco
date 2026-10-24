@@ -522,6 +522,63 @@ impl FileSystem for Fat {
         &self.info
     }
 
+    fn allocation(&self) -> Option<crate::Allocation> {
+        if !self.table {
+            return None;
+        }
+        let count = u64::from(self.cluster_count);
+        let mut ranges = crate::Ranges::default();
+        // The boot sector, the FATs and FAT12/16's root folder come first.
+        ranges.add(0, self.data_start);
+        // Free (0) and bad clusters aren't copied; the FAT says which.
+        let (bits, bad) = match self.kind {
+            FsKind::Fat12 => (12, 0xFF7),
+            FsKind::Fat16 => (16, 0xFFF7),
+            _ => (32, 0x0FFF_FFF7),
+        };
+        let mut add = |cluster: u64, value: u32| {
+            if value != 0 && value != bad {
+                let at = self.data_start + (cluster - 2) * self.cluster_size;
+                ranges.add(at, at + self.cluster_size);
+            }
+        };
+        if bits == 32 {
+            // FAT32's table can be hundreds of MiB: a piece at a time.
+            const PIECE: u64 = 1 << 20;
+            let mut cluster = 2;
+            while cluster < count + 2 {
+                let n = PIECE.min(count + 2 - cluster);
+                let raw = self
+                    .volume
+                    .read_vec(self.fat_start + 4 * cluster, 4 * n)
+                    .ok()?;
+                for (i, entry) in raw.as_chunks::<4>().0.iter().enumerate() {
+                    add(cluster + i as u64, u32::from_le_bytes(*entry) & 0x0FFF_FFFF);
+                }
+                cluster += n;
+            }
+        } else {
+            let length = ((count + 2) * bits).div_ceil(8);
+            let raw = self.volume.read_vec(self.fat_start, length).ok()?;
+            for cluster in 2..count + 2 {
+                let value = if bits == 16 {
+                    let at = usize::try_from(2 * cluster).ok()?;
+                    u32::from(u16::from_le_bytes([raw[at], raw[at + 1]]))
+                } else {
+                    let at = usize::try_from(cluster + cluster / 2).ok()?;
+                    let pair = u16::from_le_bytes([raw[at], *raw.get(at + 1).unwrap_or(&0)]);
+                    u32::from(if cluster & 1 == 1 {
+                        pair >> 4
+                    } else {
+                        pair & 0x0FFF
+                    })
+                };
+                add(cluster, value);
+            }
+        }
+        Some(ranges.finish(self.data_start + count * self.cluster_size))
+    }
+
     fn root(&self) -> EntryId {
         if self.kind == FsKind::Fat32 {
             EntryId::Clusters {

@@ -28,6 +28,8 @@ mod time;
 mod volume;
 
 #[cfg(test)]
+mod tests_allocation;
+#[cfg(test)]
 mod tests_apfs;
 #[cfg(test)]
 mod tests_btrfs;
@@ -170,9 +172,80 @@ pub struct VolumeInfo {
     pub cluster_size: u64,
 }
 
+/// Which parts of a volume its file system uses, so a copy can skip the
+/// rest.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Allocation {
+    /// Byte ranges from the volume's start that are in use, the file
+    /// system's own structures included: in order, apart, not empty.
+    pub used: Vec<(u64, u64)>,
+    /// How far from the volume's start `used` speaks for. Past this
+    /// (backup boot sectors, the slack after the last cluster) everything
+    /// counts as used.
+    pub covered: u64,
+}
+
+impl Allocation {
+    /// Bytes in use within `covered`.
+    pub fn used_bytes(&self) -> u64 {
+        self.used.iter().map(|(start, end)| end - start).sum()
+    }
+}
+
+/// Builds the ranges of an [`Allocation`], joining ones that touch.
+#[derive(Default)]
+pub(crate) struct Ranges(Vec<(u64, u64)>);
+
+impl Ranges {
+    pub fn add(&mut self, start: u64, end: u64) {
+        if start >= end {
+            return;
+        }
+        match self.0.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => self.0.push((start, end)),
+        }
+    }
+
+    /// Bit `i` of `bits` (least significant first) for `unit` bytes at
+    /// `base + i * unit`, for the first `count` bits.
+    pub fn add_bits(&mut self, bits: &[u8], count: u64, base: u64, unit: u64) {
+        let count = count.min(bits.len() as u64 * 8);
+        let mut i = 0;
+        while i < count {
+            let byte = bits[usize::try_from(i / 8).unwrap_or(usize::MAX)];
+            if byte == 0 && i % 8 == 0 {
+                i += 8;
+                continue;
+            }
+            if byte & (1 << (i % 8)) != 0 {
+                self.add(base + i * unit, base + (i + 1) * unit);
+            }
+            i += 1;
+        }
+    }
+
+    pub fn finish(self, covered: u64) -> Allocation {
+        let used = self
+            .0
+            .into_iter()
+            .map(|(start, end)| (start, end.min(covered)))
+            .filter(|(start, end)| start < end)
+            .collect();
+        Allocation { used, covered }
+    }
+}
+
 /// A mounted-for-reading file system.
 pub trait FileSystem: Send + Sync {
     fn info(&self) -> &VolumeInfo;
+
+    /// Which parts of the volume are in use, when the file system keeps
+    /// track (NTFS's `$Bitmap`, the FAT, exFAT's allocation bitmap);
+    /// `None` when it doesn't or that can't be read, meaning all of it.
+    fn allocation(&self) -> Option<Allocation> {
+        None
+    }
 
     /// The root folder.
     fn root(&self) -> EntryId;

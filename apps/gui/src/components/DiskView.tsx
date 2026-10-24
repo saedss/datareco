@@ -18,6 +18,7 @@ import { formatNumber, formatSize } from "../format";
 import { ApplyBox, CreateForm, EditActions, EditForm, FieldForm, PendingChanges, UndoBox } from "./TableEditing";
 import { FormatForm, LabelForm, LetterForm, WipeForm, rangeOf, typeNote } from "./VolumeForms";
 import { MoveForm, ResizeForm } from "./MoveForms";
+import { CopySection } from "./CloneForms";
 
 type Props = {
   sourceId: string;
@@ -330,6 +331,17 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
           </>
         )}
       </section>
+
+      <CopySection
+        sourceId={sourceId}
+        segment={segment?.kind === "partition" && ops.length === 0 ? segment : null}
+        segmentWhat={segment ? describe(segment) : null}
+        blocked={
+          unfinishedMove
+            ? "A partition move on this disk didn't finish: carry it on before copying."
+            : null
+        }
+      />
 
       {!isImage && <HealthSection sourceId={sourceId} />}
 

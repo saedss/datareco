@@ -88,7 +88,7 @@ pub fn plan(disk: &Disk, ops: &[Operation]) -> Result<Plan> {
 
 /// Fills in what a changed table would write: only the sectors that would
 /// really change (they're what gets backed up).
-fn finish(mut plan: Plan, table: &EditableTable, disk: &Disk) -> Result<Plan> {
+pub(super) fn finish(mut plan: Plan, table: &EditableTable, disk: &Disk) -> Result<Plan> {
     plan.style = table.style;
     let sector_size = u64::from(disk.sector_size());
     for write in table.encode() {

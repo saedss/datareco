@@ -5,6 +5,7 @@ mod format;
 mod health;
 mod imaging;
 mod manage;
+mod migrate;
 mod partitions;
 mod raw;
 mod relocate;
@@ -309,6 +310,53 @@ enum Command {
         #[arg(long)]
         apply: Option<String>,
     },
+    /// Copy a partition into free space on another disk (its used space
+    /// only), and add it to that disk's partition table. Shows the copy;
+    /// copies only with --apply and the target's name.
+    ClonePartition {
+        /// A disk (disk1) or image file path.
+        source: String,
+        #[arg(long, short)]
+        partition: u32,
+        /// The disk (disk2) or image file to copy it onto.
+        #[arg(long)]
+        to: String,
+        /// Where on it the copy starts (default: the first free space that fits).
+        #[arg(long)]
+        at_sector: Option<u64>,
+        /// Where the target's old partition table's backup goes.
+        #[arg(long)]
+        backup_dir: Option<PathBuf>,
+        /// Copy it, typing the target's name (disk2) or the image's file name.
+        #[arg(long)]
+        apply: Option<String>,
+    },
+    /// Copy every partition of a disk onto another disk, used space only, so
+    /// a smaller disk will do if they fit. From the disk Windows runs from,
+    /// the copy is one Windows starts from. Everything on the target is
+    /// erased. Shows the copy; copies only with --apply and the target's name.
+    Migrate {
+        /// A disk (disk0) or image file path.
+        source: String,
+        /// The disk (disk2) or image file to copy it onto.
+        #[arg(long)]
+        to: String,
+        /// Keep the disk's IDs (the default for the disk Windows runs from):
+        /// Windows then keeps one of the two disks offline while both are
+        /// connected.
+        #[arg(long, conflicts_with = "new_ids")]
+        keep_ids: bool,
+        /// Give the copy new disk IDs, so both can be used side by side.
+        #[arg(long)]
+        new_ids: bool,
+        /// Leave the target's spare room right after this partition, so
+        /// Resize can grow it there later.
+        #[arg(long)]
+        space_after: Option<u32>,
+        /// Copy it, typing the target's name (disk2) or the image's file name.
+        #[arg(long)]
+        apply: Option<String>,
+    },
     /// Shrink or grow an NTFS partition through Windows (C: too, while it
     /// runs). Growing needs free space right after it.
     Resize {
@@ -560,6 +608,41 @@ fn run() -> ExitCode {
             size,
             apply,
         } => relocate::resize(&source, partition, &size, apply.as_deref()),
+        Command::ClonePartition {
+            source,
+            partition,
+            to,
+            at_sector,
+            backup_dir,
+            apply,
+        } => migrate::clone_partition(&migrate::PartitionRequest {
+            source: &source,
+            partition,
+            to: &to,
+            at_sector,
+            backup_dir: backup_dir.as_deref(),
+            apply: apply.as_deref(),
+        }),
+        Command::Migrate {
+            source,
+            to,
+            keep_ids,
+            new_ids,
+            space_after,
+            apply,
+        } => migrate::migrate(&migrate::MigrateRequest {
+            source: &source,
+            to: &to,
+            keep_ids: if keep_ids {
+                Some(true)
+            } else if new_ids {
+                Some(false)
+            } else {
+                None
+            },
+            space_after,
+            apply: apply.as_deref(),
+        }),
         Command::Format {
             source,
             partition,

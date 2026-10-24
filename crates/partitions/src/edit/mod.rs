@@ -12,6 +12,7 @@
 //! MBR logical partitions shift when one before them goes.
 
 mod backup;
+mod clone;
 mod encode;
 mod guid;
 mod ops;
@@ -33,6 +34,9 @@ use crate::table::{TableKind, read, read_header, read_table};
 pub use backup::{
     BackupInfo, Change, DiskFacts, SectorWrite, TableBackup, apply_known_writes, apply_writes,
     default_backup_dir, list_backups, next_to_undo, read_backup, undo_writes, verify_writes,
+};
+pub use clone::{
+    DiskCopy, DiskCopyOptions, PartitionCopy, PlacedPart, plan_disk_copy, plan_partition_copy,
 };
 pub use ops::{Operation, Step};
 pub use plan::{Plan, StepError, plan, plan_move, preview};

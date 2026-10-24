@@ -7,7 +7,9 @@
 //! passed [`check_disk_target`] or [`check_disk_for_changes`], and single
 //! volumes that passed [`check_volume_for_changes`], each confirmed by
 //! typing the disk's name; and through [`manage`], which asks Windows to
-//! format a volume or change its label or drive letter.
+//! format a volume or change its label or drive letter. Closing volumes so
+//! a copy reads them unchanged ([`close_volumes`]) opens them for writing
+//! only to lock them, and [`Snapshot`] asks Windows for shadow copies.
 //! The one exception is [`read_health_data`]: Windows only passes ATA
 //! S.M.A.R.T. commands on through a handle opened for writing, so it opens
 //! one, and sends only the read-only commands listed in its module.
@@ -25,6 +27,7 @@ mod devices;
 mod disk;
 mod error;
 mod health;
+mod hold;
 pub mod manage;
 mod search;
 mod source;
@@ -49,6 +52,7 @@ pub use devices::{
 pub use disk::{BLOCK_SIZE, Disk, ReadOutcome, ReadPolicy};
 pub use error::{Error, Result};
 pub use health::{HEALTH_PAGE, HealthData, HealthPath, read_health_data};
+pub use hold::{ClosedVolumes, Snapshot, close_volumes, volume_name};
 pub use search::SearchProgress;
 pub use source::{FileSource, MemorySource, SectorSource, is_device_gone};
 pub use spec::SourceSpec;

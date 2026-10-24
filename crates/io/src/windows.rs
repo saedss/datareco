@@ -135,23 +135,7 @@ fn create_file(path: &str, access: u32, flags: FILE_FLAGS_AND_ATTRIBUTES) -> io:
 /// straight to the drive. The locks last until the returned handles close.
 pub(crate) fn open_disk_for_writing(number: u32, volumes: &[String]) -> Result<OpenedDisk> {
     let name = SourceSpec::PhysicalDisk(number).display_name();
-    let mut locks = Vec::new();
-    for volume in volumes {
-        let volume_name = SourceSpec::Volume(volume.clone()).display_name();
-        let file = create_file(volume, GENERIC_READ | GENERIC_WRITE, 0)
-            .map_err(|e| Error::from_io(&volume_name, e))?;
-        if ioctl(&file, FSCTL_LOCK_VOLUME, &[], &mut []).is_err() {
-            return Err(Error::Refused {
-                reason: format!(
-                    "{volume_name} on {name} is in use. Close the programs and windows using \
-                     it, then try again."
-                ),
-            });
-        }
-        ioctl(&file, FSCTL_DISMOUNT_VOLUME, &[], &mut [])
-            .map_err(|e| Error::from_io(&volume_name, e))?;
-        locks.push(file);
-    }
+    let locks = close_volumes(volumes, &name)?;
     let file = create_file(
         &disk_path(number),
         GENERIC_READ | GENERIC_WRITE,
@@ -165,6 +149,73 @@ pub(crate) fn open_disk_for_writing(number: u32, volumes: &[String]) -> Result<O
         size,
         sector_size: geometry.BytesPerSector,
     })
+}
+
+/// Locks and dismounts each volume (of the disk `disk` names), so neither
+/// Windows nor any program uses them; the locks last until the returned
+/// handles close, and then Windows mounts them again. Locking needs the
+/// volume opened for writing, though nothing is written through it.
+pub(crate) fn close_volumes(volumes: &[String], disk: &str) -> Result<Vec<File>> {
+    let mut locks = Vec::new();
+    for volume in volumes {
+        let volume_name = SourceSpec::Volume(volume.clone()).display_name();
+        let file = create_file(volume, GENERIC_READ | GENERIC_WRITE, 0)
+            .map_err(|e| Error::from_io(&volume_name, e))?;
+        if ioctl(&file, FSCTL_LOCK_VOLUME, &[], &mut []).is_err() {
+            return Err(Error::Refused {
+                reason: format!(
+                    "{volume_name} on {disk} is in use. Close the programs and windows using \
+                     it, then try again."
+                ),
+            });
+        }
+        ioctl(&file, FSCTL_DISMOUNT_VOLUME, &[], &mut [])
+            .map_err(|e| Error::from_io(&volume_name, e))?;
+        locks.push(file);
+    }
+    Ok(locks)
+}
+
+/// Asks Windows for a snapshot (a shadow copy) of a mounted NTFS or ReFS
+/// volume: it stays as the volume was at this moment while the volume goes
+/// on changing. Returns its ID and the device to read it from.
+pub(crate) fn take_snapshot(volume: &str) -> Result<(String, String)> {
+    let name = SourceSpec::Volume(volume.to_owned()).display_name();
+    let root = format!("{}\\", volume.trim_end_matches('\\')).replace('\'', "''");
+    let script = format!(
+        "$r = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create -Arguments \
+         @{{ Volume = '{root}'; Context = 'ClientAccessible' }} -ErrorAction Stop; \
+         if ($r.ReturnValue -ne 0) {{ throw \"Windows' snapshot service answered with error $($r.ReturnValue).\" }}; \
+         $s = Get-CimInstance -ClassName Win32_ShadowCopy -Filter \"ID='$($r.ShadowID)'\" -ErrorAction Stop; \
+         \"$($s.ID)|$($s.DeviceObject)\""
+    );
+    let out = powershell(&script, &name, "Windows couldn't take a snapshot of it")?;
+    let line = out.lines().map(str::trim).find(|l| l.contains('|'));
+    match line.and_then(|l| l.split_once('|')) {
+        Some((id, device)) if !id.is_empty() && device.starts_with(r"\\?\GLOBALROOT\") => {
+            Ok((id.to_owned(), device.to_owned()))
+        }
+        _ => Err(Error::Io {
+            name,
+            source: io::Error::other(format!("unexpected answer from Windows: {}", out.trim())),
+        }),
+    }
+}
+
+/// Deletes a snapshot [`take_snapshot`] took.
+pub(crate) fn delete_snapshot(id: &str) -> Result<()> {
+    // IDs look like {GUID}; nothing else goes into the script.
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() || matches!(c, '{' | '}' | '-'))
+    {
+        return Err(Error::refused("That isn't a snapshot ID."));
+    }
+    let script = format!(
+        "Get-CimInstance -ClassName Win32_ShadowCopy -Filter \"ID='{id}'\" -ErrorAction Stop | \
+         Remove-CimInstance -ErrorAction Stop"
+    );
+    powershell(&script, "a snapshot", "Windows couldn't delete it").map(|_| ())
 }
 
 /// Locks and dismounts one volume, so neither Windows nor any program uses

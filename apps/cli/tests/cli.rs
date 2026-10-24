@@ -1227,3 +1227,95 @@ fn partitions_move_and_align_and_read_back() {
     let _ = std::fs::remove_dir_all(journal);
     let _ = std::fs::remove_dir_all(backups);
 }
+
+#[test]
+fn partitions_clone_and_migrate_between_image_files() {
+    let source = temp_image("clone-source.img", &vec![0u8; 128 << 20]);
+    let small = temp_image("clone-small.img", &vec![0u8; 56 << 20]);
+    let other = temp_image("clone-other.img", &vec![0u8; 64 << 20]);
+    let path = |p: &PathBuf| p.to_str().unwrap().to_owned();
+    let name = |p: &PathBuf| p.file_name().unwrap().to_str().unwrap().to_owned();
+    let backups = temp_folder("clone-backups");
+    let ok = |args: &[&str]| {
+        let out = datareco(args);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        stdout(&out)
+    };
+    let table = |image: &PathBuf, args: &[&str]| {
+        let (img, apply) = (path(image), name(image));
+        let mut all = vec!["table", img.as_str()];
+        all.extend_from_slice(args);
+        all.extend_from_slice(&["--backup-dir", backups.to_str().unwrap(), "--apply", &apply]);
+        ok(&all);
+    };
+    // The source: exFAT at 1 MiB, and FAT32 far along at 80 MiB.
+    let (src, src_name) = (path(&source), name(&source));
+    table(&source, &["init", "gpt"]);
+    table(&source, &["create", "--size", "8MiB"]);
+    table(
+        &source,
+        &[
+            "create", "--size", "40MiB", "--start", "163840", "-t", "fat32",
+        ],
+    );
+    ok(&[
+        "format", &src, "-p", "1", "--fs", "exfat", "--label", "First", "--apply", &src_name,
+    ]);
+    ok(&[
+        "format", &src, "-p", "2", "--fs", "fat32", "--label", "SECOND", "--apply", &src_name,
+    ]);
+
+    // The whole disk onto a smaller one: the gap goes.
+    let (to, to_name) = (path(&small), name(&small));
+    let preview = ok(&["migrate", &src, "--to", &to]);
+    assert!(
+        preview.contains("to sector 18432") && preview.contains("Nothing was written"),
+        "{preview}"
+    );
+    let done = ok(&["migrate", &src, "--to", &to, "--apply", &to_name]);
+    assert!(done.contains("Copied."), "{done}");
+    let parts = ok(&["partitions", &to]);
+    assert!(parts.contains("18432"), "{parts}");
+    assert!(ok(&["ls", &to, "-p", "1"]).starts_with("exFAT \"First\""));
+    assert!(ok(&["ls", &to, "-p", "2"]).starts_with("FAT32 \"SECOND\""));
+
+    // Too small: says what's needed.
+    let tiny = temp_image("clone-tiny.img", &vec![0u8; 32 << 20]);
+    let out = datareco(&["migrate", &src, "--to", &path(&tiny)]);
+    assert!(
+        stderr(&out).contains("needs to hold at least"),
+        "{}",
+        stderr(&out)
+    );
+
+    // One partition into free space on another disk, then undone.
+    let (other_path, other_name) = (path(&other), name(&other));
+    table(&other, &["init", "mbr"]);
+    table(&other, &["create", "--size", "4MiB"]);
+    let out = ok(&[
+        "clone-partition",
+        &src,
+        "-p",
+        "1",
+        "--to",
+        &other_path,
+        "--backup-dir",
+        backups.to_str().unwrap(),
+        "--apply",
+        &other_name,
+    ]);
+    assert!(out.contains("Copied."), "{out}");
+    let listing = ok(&["ls", &other_path, "-p", "2"]);
+    assert!(listing.starts_with("exFAT \"First\""), "{listing}");
+    table(&other, &["undo"]);
+    let parts = ok(&["partitions", &other_path]);
+    assert!(
+        !parts.contains("10240"),
+        "the copy is off the table: {parts}"
+    );
+
+    for image in [source, small, other, tiny] {
+        std::fs::remove_file(image).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(backups);
+}

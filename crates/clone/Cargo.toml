@@ -1,0 +1,23 @@
+[package]
+name = "datareco-clone"
+description = "Copying partitions and whole disks onto other disks for DataReco, used space only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+datareco-io.workspace = true
+datareco-partitions.workspace = true
+datareco-fs.workspace = true
+datareco-imaging.workspace = true
+datareco-relocate.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+datareco-fs = { workspace = true, features = ["testutil"] }
+
+[lints]
+workspace = true

@@ -318,6 +318,16 @@ impl FileSystem for Exfat {
         &self.info
     }
 
+    fn allocation(&self) -> Option<crate::Allocation> {
+        let bitmap = self.bitmap.as_ref()?;
+        let count = u64::from(self.cluster_count);
+        let mut ranges = crate::Ranges::default();
+        // The boot regions and the FAT come before the clusters.
+        ranges.add(0, self.heap_start);
+        ranges.add_bits(bitmap, count, self.heap_start, self.cluster_size);
+        Some(ranges.finish(self.heap_start + count * self.cluster_size))
+    }
+
     fn root(&self) -> EntryId {
         EntryId::Clusters {
             cluster: self.root_cluster,

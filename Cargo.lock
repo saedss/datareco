@@ -595,6 +595,7 @@ name = "datareco-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "datareco-clone",
  "datareco-format",
  "datareco-fs",
  "datareco-health",
@@ -605,6 +606,19 @@ dependencies = [
  "datareco-scan",
  "datareco-templates",
  "serde_json",
+]
+
+[[package]]
+name = "datareco-clone"
+version = "0.1.0"
+dependencies = [
+ "datareco-fs",
+ "datareco-imaging",
+ "datareco-io",
+ "datareco-partitions",
+ "datareco-relocate",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -634,6 +648,7 @@ dependencies = [
 name = "datareco-gui"
 version = "0.1.0"
 dependencies = [
+ "datareco-clone",
  "datareco-format",
  "datareco-fs",
  "datareco-health",

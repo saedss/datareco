@@ -8,7 +8,10 @@ use std::io;
 /// Rewrites the note at the partition now starting at `start_lba` (and in
 /// the boot sector's backup copies). Returns which file system it was, if
 /// one that keeps such a note. Doing it twice changes nothing.
-pub(crate) fn fix(
+///
+/// `read` and `write` take sector numbers on the disk; `sectors` is the
+/// partition's length.
+pub fn fix(
     read: &mut dyn FnMut(u64, &mut [u8]) -> io::Result<()>,
     write: &mut dyn FnMut(u64, &[u8]) -> io::Result<()>,
     start_lba: u64,

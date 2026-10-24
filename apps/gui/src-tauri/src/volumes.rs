@@ -15,6 +15,7 @@ use datareco_io::{DeviceList, Disk, SectorTarget, SourceSpec, VolumeInfo, list_d
 use serde::Serialize;
 use tauri::State;
 
+use crate::clones::Clones;
 use crate::copies::Copies;
 use crate::files::{FileSystems, Recoveries};
 use crate::health::DiskTests;
@@ -114,6 +115,7 @@ pub fn format_partition(
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
     moves: State<'_, Moves>,
+    clones: State<'_, Clones>,
     id: String,
     start_lba: Option<u64>,
     sectors: Option<u64>,
@@ -133,6 +135,7 @@ pub fn format_partition(
             tests,
             wipes,
             moves,
+            clones,
         },
     )?;
     let disk = Disk::open(&spec)?;
@@ -230,6 +233,7 @@ pub fn start_wipe(
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
     moves: State<'_, Moves>,
+    clones: State<'_, Clones>,
     id: String,
     start_lba: Option<u64>,
     sectors: Option<u64>,
@@ -251,6 +255,7 @@ pub fn start_wipe(
             tests,
             wipes,
             moves,
+            clones,
         };
         check_not_busy(&spec, &busy)?;
         let target = spot.open(&confirmation)?;

@@ -3,6 +3,7 @@
 // Release builds run without a console window on Windows. Do not remove.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clones;
 mod copies;
 mod files;
 mod health;
@@ -226,6 +227,7 @@ fn main() {
         .manage(health::DiskTests::default())
         .manage(volumes::Wipes::default())
         .manage(relocations::Moves::default())
+        .manage(clones::Clones::default())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             app.manage(Templates::load(config.join("templates")));
@@ -301,6 +303,13 @@ fn main() {
             relocations::stop_move,
             relocations::resize_limits,
             relocations::resize_partition,
+            clones::clone_info,
+            clones::preview_disk_copy,
+            clones::start_disk_copy,
+            clones::preview_partition_copy,
+            clones::start_partition_copy,
+            clones::continue_clone,
+            clones::stop_clone,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");
