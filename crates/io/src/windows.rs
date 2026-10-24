@@ -22,9 +22,10 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH, FILE_FLAGS_AND_ATTRIBUTES,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
-    GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, OPEN_EXISTING,
+    CreateFileW, DeleteVolumeMountPointW, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW,
+    FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetLogicalDrives, GetVolumeInformationW,
+    GetVolumePathNamesForVolumeNameW, OPEN_EXISTING, SetVolumeLabelW, SetVolumeMountPointW,
 };
 use windows_sys::Win32::Storage::IscsiDisc::{
     IOCTL_SCSI_PASS_THROUGH, SCSI_IOCTL_DATA_IN, SCSI_PASS_THROUGH,
@@ -52,7 +53,7 @@ use crate::error::{Error, Result};
 use crate::health::{HEALTH_PAGE, HealthData, HealthPath};
 use crate::source::FileSource;
 use crate::spec::SourceSpec;
-use crate::target::OpenedDisk;
+use crate::target::{OpenedDisk, OpenedVolume};
 
 /// Physical disk numbers to probe. Windows numbers disks from 0 and rarely
 /// leaves gaps.
@@ -163,6 +164,140 @@ pub(crate) fn open_disk_for_writing(number: u32, volumes: &[String]) -> Result<O
         locks,
         size,
         sector_size: geometry.BytesPerSector,
+    })
+}
+
+/// Locks and dismounts one volume, so neither Windows nor any program uses
+/// it while it's written, and opens it for writing straight to the drive.
+/// The lock lasts until the handle closes; then Windows mounts it again.
+pub(crate) fn open_volume_for_writing(path: &str) -> Result<OpenedVolume> {
+    let name = SourceSpec::Volume(path.to_owned()).display_name();
+    let file = create_file(
+        &volume_device_path(path),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
+    )
+    .map_err(|e| Error::from_io(&name, e))?;
+    if ioctl(&file, FSCTL_LOCK_VOLUME, &[], &mut []).is_err() {
+        return Err(Error::Refused {
+            reason: format!(
+                "{name} is in use. Close the programs and windows using it, then try again."
+            ),
+        });
+    }
+    ioctl(&file, FSCTL_DISMOUNT_VOLUME, &[], &mut []).map_err(|e| Error::from_io(&name, e))?;
+    // Writes may reach the volume's very end, past any file system's idea of it.
+    let _ = ioctl(&file, FSCTL_ALLOW_EXTENDED_DASD_IO, &[], &mut []);
+    let size = volume_length(&file).map_err(|e| Error::from_io(&name, e))?;
+    let sector_size = volume_sector_size(&file).unwrap_or(512);
+    Ok(OpenedVolume {
+        file,
+        size,
+        sector_size,
+    })
+}
+
+/// `\\?\Volume{…}\`, the root Windows' volume functions take.
+fn volume_root(path: &str) -> Vec<u16> {
+    to_wide(&format!("{}\\", path.trim_end_matches('\\')))
+}
+
+pub(crate) fn set_volume_label(path: &str, label: Option<&str>) -> Result<()> {
+    let name = SourceSpec::Volume(path.to_owned()).display_name();
+    let root = volume_root(path);
+    let label = label.map(to_wide);
+    // SAFETY: both strings are NUL-terminated and outlive the call; a null
+    // label removes it, which is allowed.
+    let ok = unsafe {
+        SetVolumeLabelW(
+            root.as_ptr(),
+            label.as_ref().map_or(ptr::null(), |l| l.as_ptr()),
+        )
+    };
+    if ok == 0 {
+        return Err(Error::from_io(&name, io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+pub(crate) fn set_drive_letter(path: &str, letter: Option<char>) -> Result<()> {
+    let name = SourceSpec::Volume(path.to_owned()).display_name();
+    let root = volume_root(path);
+    let current: Vec<String> = mount_points(&root)
+        .into_iter()
+        .filter(|m| m.len() == 3 && m.ends_with(":\\"))
+        .collect();
+    if let Some(letter) = letter {
+        let wanted = format!("{letter}:\\");
+        if current.iter().any(|m| m.eq_ignore_ascii_case(&wanted)) {
+            return Ok(());
+        }
+        // SAFETY: no arguments; returns a bitmask of drive letters in use.
+        let in_use = unsafe { GetLogicalDrives() };
+        let bit = u32::from(letter) - u32::from('A');
+        if in_use & (1 << bit) != 0 {
+            return Err(Error::refused(format!("{letter}: is already in use.")));
+        }
+    }
+    for mount in &current {
+        let mount = to_wide(mount);
+        // SAFETY: `mount` is NUL-terminated and outlives the call.
+        if unsafe { DeleteVolumeMountPointW(mount.as_ptr()) } == 0 {
+            return Err(Error::from_io(&name, io::Error::last_os_error()));
+        }
+    }
+    if let Some(letter) = letter {
+        let mount = to_wide(&format!("{letter}:\\"));
+        // SAFETY: both strings are NUL-terminated and outlive the call.
+        if unsafe { SetVolumeMountPointW(mount.as_ptr(), root.as_ptr()) } == 0 {
+            return Err(Error::from_io(&name, io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+/// Formats a volume with Windows' own formatter (`Format-Volume`), for the
+/// file systems DataReco doesn't format itself.
+pub(crate) fn format_with_windows(
+    path: &str,
+    file_system: &str,
+    label: Option<&str>,
+    quick: bool,
+) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    let name = SourceSpec::Volume(path.to_owned()).display_name();
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
+    let mut script = format!(
+        "Format-Volume -Path {} -FileSystem {} -Force -Confirm:$false -ErrorAction Stop",
+        quote(&format!("{}\\", path.trim_end_matches('\\'))),
+        file_system
+    );
+    if let Some(label) = label {
+        script.push_str(&format!(" -NewFileSystemLabel {}", quote(label)));
+    }
+    if !quick {
+        script.push_str(" -Full");
+    }
+    script.push_str(" | Out-Null");
+    // No console window flashing up behind the desktop app.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| Error::from_io("Windows' formatter", e))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let message = String::from_utf8_lossy(&output.stderr);
+    let first = message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("it gave no reason");
+    Err(Error::Io {
+        name,
+        source: io::Error::other(format!("Windows couldn't format it: {first}")),
     })
 }
 

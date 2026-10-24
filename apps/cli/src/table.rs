@@ -8,7 +8,7 @@ use std::sync::Arc;
 use clap::Subcommand;
 use datareco_io::{Disk, Error};
 use datareco_io::{
-    DiskTarget, ImageTarget, SectorTarget, SourceSpec, check_disk_for_table_changes, list_devices,
+    DiskTarget, ImageTarget, SectorTarget, SourceSpec, check_disk_for_changes, list_devices,
 };
 use datareco_partitions::edit::{
     Change, Operation, Plan, Style, TableBackup, apply_writes, default_backup_dir, list_backups,
@@ -442,7 +442,7 @@ fn write(
         match spec {
             SourceSpec::PhysicalDisk(number) => {
                 let devices = list_devices()?;
-                let check = check_disk_for_table_changes(*number, &devices)?;
+                let check = check_disk_for_changes(*number, &devices)?;
                 if devices.disks_of_path(backup_dir).contains(number) {
                     return Err(CliError::Message(format!(
                         "The backup folder {} is on {}; pick one on another disk with --backup-dir.",

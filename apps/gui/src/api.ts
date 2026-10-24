@@ -450,6 +450,32 @@ export type UndoView = {
   refusal: string | null;
 };
 
+// ---------------------------------------------------------------- formatting and wiping
+
+export type FormatSummary = {
+  kind: "fat32" | "exfat";
+  label: string | null;
+  clusterSize: number;
+  clusters: number;
+  /** Bytes files can use. */
+  capacity: number;
+  serial: number;
+};
+
+/** Where a format or wipe writes, and what to type to confirm it. */
+export type SpotInfo = {
+  size: number;
+  confirmation: string;
+  /** Volumes closed while it's written. */
+  closing: string[];
+  /** The Windows volume it's written through, if any. */
+  volume: string | null;
+};
+
+export type FormatPreview = { spot: SpotInfo; summary: FormatSummary | null; problem: string | null };
+
+export type WipeProgress = { total: number; done: number; bytesPerSecond: number; finished: boolean };
+
 export type CommandError = {
   kind:
     | "access_denied"
@@ -644,6 +670,38 @@ export const api = {
   previewUndo: (id: string, backup: string) => invoke<UndoView>("preview_undo", { id, backup }),
   undoTable: (id: string, backup: string, confirmation: string) =>
     invoke<{ backup: string }>("undo_table", { id, backup, confirmation }),
+
+  /** What formatting a partition (or, with nulls, the whole source) would make. */
+  previewFormat: (
+    id: string,
+    startLba: number | null,
+    sectors: number | null,
+    fileSystem: string,
+    label: string | null,
+    clusterSize: number | null,
+  ) => invoke<FormatPreview>("preview_format", { id, startLba, sectors, fileSystem, label, clusterSize }),
+  /** Formats once `confirmation` is the disk's name; says what it made. */
+  formatPartition: (
+    id: string,
+    startLba: number | null,
+    sectors: number | null,
+    fileSystem: string,
+    label: string | null,
+    clusterSize: number | null,
+    full: boolean,
+    confirmation: string,
+  ) =>
+    invoke<string>("format_partition", { id, startLba, sectors, fileSystem, label, clusterSize, full, confirmation }),
+  previewWipe: (id: string, startLba: number | null, sectors: number | null) =>
+    invoke<SpotInfo>("preview_wipe", { id, startLba, sectors }),
+  /** Starts wiping once `confirmation` is the disk's name; then call continueWipe. */
+  startWipe: (id: string, startLba: number | null, sectors: number | null, pattern: "zeros" | "random", confirmation: string) =>
+    invoke<WipeProgress>("start_wipe", { id, startLba, sectors, pattern, confirmation }),
+  continueWipe: (id: string) => invoke<WipeProgress>("continue_wipe", { id }),
+  stopWipe: (id: string) => invoke<WipeProgress | null>("stop_wipe", { id }),
+  setLabel: (id: string, startLba: number | null, label: string) => invoke<void>("set_label", { id, startLba, label }),
+  setLetter: (id: string, startLba: number | null, letter: string | null) =>
+    invoke<void>("set_letter", { id, startLba, letter }),
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

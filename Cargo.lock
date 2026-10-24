@@ -595,6 +595,7 @@ name = "datareco-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "datareco-format",
  "datareco-fs",
  "datareco-health",
  "datareco-imaging",
@@ -603,6 +604,16 @@ dependencies = [
  "datareco-scan",
  "datareco-templates",
  "serde_json",
+]
+
+[[package]]
+name = "datareco-format"
+version = "0.1.0"
+dependencies = [
+ "datareco-fs",
+ "datareco-io",
+ "datareco-partitions",
+ "serde",
 ]
 
 [[package]]
@@ -622,6 +633,7 @@ dependencies = [
 name = "datareco-gui"
 version = "0.1.0"
 dependencies = [
+ "datareco-format",
  "datareco-fs",
  "datareco-health",
  "datareco-imaging",

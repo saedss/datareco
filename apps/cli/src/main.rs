@@ -4,6 +4,7 @@ mod files;
 mod format;
 mod health;
 mod imaging;
+mod manage;
 mod partitions;
 mod raw;
 mod scan;
@@ -209,6 +210,62 @@ enum Command {
         #[arg(long, global = true)]
         backup_dir: Option<PathBuf>,
     },
+    /// Format a partition (or a disk or image with no partition table): FAT32
+    /// (any size) and exFAT by DataReco, NTFS through Windows. Shows what it
+    /// would do; formats only with --apply and the disk's name.
+    Format {
+        /// A disk (disk1) or image file path.
+        source: String,
+        /// The partition, by its number in `datareco partitions`.
+        #[arg(long, short)]
+        partition: Option<u32>,
+        /// fat32, exfat or ntfs.
+        #[arg(long = "fs")]
+        file_system: String,
+        /// The volume label.
+        #[arg(long)]
+        label: Option<String>,
+        /// Cluster size, e.g. 32K (default: the usual one for its size).
+        #[arg(long)]
+        cluster: Option<String>,
+        /// NTFS: read and check every sector (slow). Without it, a quick format.
+        #[arg(long)]
+        full: bool,
+        /// Write it, typing the disk's name (disk1) or the image's file name.
+        #[arg(long)]
+        apply: Option<String>,
+    },
+    /// Write over a partition, or a whole disk, so nothing on it can be
+    /// recovered. Shows what it would do; wipes only with --apply.
+    Wipe {
+        /// A disk (disk1) or image file path.
+        source: String,
+        /// Only this partition (default: the whole disk).
+        #[arg(long, short)]
+        partition: Option<u32>,
+        /// Random bytes instead of zeros.
+        #[arg(long)]
+        random: bool,
+        /// Write it, typing the disk's name (disk1) or the image's file name.
+        #[arg(long)]
+        apply: Option<String>,
+    },
+    /// Change a volume's label (without one, remove it).
+    Label {
+        /// A volume (E:), or a disk with -p.
+        source: String,
+        #[arg(long, short)]
+        partition: Option<u32>,
+        label: Option<String>,
+    },
+    /// Change a volume's drive letter, or take it away with "none".
+    Letter {
+        /// A volume (E:), or a disk with -p.
+        source: String,
+        #[arg(long, short)]
+        partition: Option<u32>,
+        letter: String,
+    },
     /// Search for lost partitions (after a wiped or damaged partition table).
     FindPartitions {
         /// A disk (disk0) or image file path.
@@ -395,6 +452,39 @@ fn main() -> ExitCode {
         Command::Partitions { source } => partitions::show(&source),
         Command::FindPartitions { source, full } => partitions::find(&source, full),
         Command::Map { source } => health::map(&source),
+        Command::Format {
+            source,
+            partition,
+            file_system,
+            label,
+            cluster,
+            full,
+            apply,
+        } => manage::format(&manage::FormatRequest {
+            source: &source,
+            partition,
+            file_system: &file_system,
+            label: label.as_deref(),
+            cluster: cluster.as_deref(),
+            full,
+            apply: apply.as_deref(),
+        }),
+        Command::Wipe {
+            source,
+            partition,
+            random,
+            apply,
+        } => manage::wipe(&source, partition, random, apply.as_deref()),
+        Command::Label {
+            source,
+            partition,
+            label,
+        } => manage::label(&source, partition, label.as_deref()),
+        Command::Letter {
+            source,
+            partition,
+            letter,
+        } => manage::letter(&source, partition, &letter),
         Command::Table {
             source,
             action,

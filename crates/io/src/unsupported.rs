@@ -8,7 +8,7 @@ use std::io;
 use crate::error::{Error, Result};
 use crate::health::HealthData;
 use crate::source::FileSource;
-use crate::target::OpenedDisk;
+use crate::target::{OpenedDisk, OpenedVolume};
 
 pub(crate) fn open_physical_disk(_number: u32) -> Result<FileSource> {
     Err(unsupported("Opening physical disks"))
@@ -23,6 +23,27 @@ pub(crate) fn open_disk_for_writing(_number: u32, _volumes: &[String]) -> Result
 }
 
 pub(crate) fn update_disk_properties(_file: &File) {}
+
+pub(crate) fn open_volume_for_writing(_path: &str) -> Result<OpenedVolume> {
+    Err(unsupported("Writing to volumes"))
+}
+
+pub(crate) fn set_volume_label(_path: &str, _label: Option<&str>) -> Result<()> {
+    Err(unsupported("Changing volume labels"))
+}
+
+pub(crate) fn set_drive_letter(_path: &str, _letter: Option<char>) -> Result<()> {
+    Err(unsupported("Changing drive letters"))
+}
+
+pub(crate) fn format_with_windows(
+    _path: &str,
+    _file_system: &str,
+    _label: Option<&str>,
+    _quick: bool,
+) -> Result<()> {
+    Err(unsupported("Formatting NTFS"))
+}
 
 pub(crate) fn read_health_data(_number: u32) -> Result<HealthData> {
     Err(unsupported("Reading drive health"))

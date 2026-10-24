@@ -342,7 +342,7 @@ function EditorHeader({ title, subtitle, info, view, onView, pending }: HeaderPr
         ) : (
           <span
             className="badge"
-            title="DataReco writes only when you say so: partition table changes once you apply them, and copies onto another disk, each after you type the disk's name."
+            title="DataReco writes only when you say so: partition table changes once you apply them, formatting, wiping, and copies onto another disk, each after you type the disk's name."
           >
             Read-only
           </span>

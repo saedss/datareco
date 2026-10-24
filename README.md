@@ -12,15 +12,16 @@ and more.
 > recovers files to another disk, finds files by their contents when no file
 > system is left, and copies failing disks into image files or onto other disks.
 > It maps each disk, checks drive health (S.M.A.R.T., surface test, read
-> speed), and changes partition tables: create, delete, hide, convert MBR↔GPT,
-> put lost partitions back, and undo. Formatting, resizing, moving and cloning
-> partitions come next; see the [roadmap](docs/ROADMAP.md).
+> speed), changes partition tables (create, delete, hide, convert MBR↔GPT, put
+> lost partitions back, undo), formats partitions (FAT32 of any size, exFAT,
+> NTFS), wipes them, and changes labels and drive letters. Resizing, moving and
+> cloning partitions come next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
 DataReco only reads the disks you look at, until you ask it to write: copying
-into a new image file or onto another disk, or changing a partition table. Writing
-to a disk always needs you to type its name first.
+into a new image file or onto another disk, changing a partition table, or
+formatting or wiping. Writing to a disk always needs you to type its name first.
 Windows lets programs read disks and volumes directly only when they run as
 administrator; image files work without. The desktop app offers **Restart as
 administrator** when it needs to.
@@ -61,6 +62,14 @@ administrator** when it needs to.
     partition the search found can be **put back in the partition table** the
     same way. The disk Windows runs from, dynamic disks and damaged tables are
     left alone.
+  - **Format** a partition: FAT32 (also over 32 GiB, which Windows won't do)
+    and exFAT are made by DataReco and read back to check them; NTFS by
+    Windows' own formatter. **Wipe** writes zeros or random bytes over a
+    partition or the whole disk, so nothing on it can be recovered; it shows
+    its progress and can be stopped. **Change label** and **Change drive
+    letter** do what they say. Formatting or wiping a partition closes only
+    its own volume, so partitions on the disk Windows runs from can be
+    formatted too (not Windows' own, and the whole disk can't be wiped).
 - **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and
   btrfs volumes on the disk: folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
@@ -119,6 +128,13 @@ datareco table disk1 convert gpt --apply disk1         # keeps every partition
 datareco table disk1 restore --start 206848 --sectors 41943040 --apply disk1
 datareco table disk1 undo --apply disk1                # put back the table before the last change
 datareco table disk1 backups                           # the changes made, with their backups
+datareco format disk1 -p 2 --fs exfat --label Photos   # shows what it would make
+datareco format disk1 -p 2 --fs fat32 --apply disk1    # FAT32, any size up to 2 TiB
+datareco format disk1 -p 3 --fs ntfs --label Data --apply disk1   # through Windows
+datareco wipe disk1 -p 2 --apply disk1                 # zeros over partition 2
+datareco wipe disk2 --random --apply disk2             # the whole disk, random bytes
+datareco label E: "Holiday 2026"                       # or without a label to remove it
+datareco letter E: F                                   # or "none" to take the letter away
 datareco find backup.img --text "IMPORTANT" --ignore-case
 datareco find disk1 --hex "55 AA" -n 10
 datareco ls disk1 -p 2 -r              # every file on partition 2, deleted ones too
@@ -174,6 +190,11 @@ or an image file path.
   refuses the disk Windows runs from, dynamic disks, damaged tables, and disks a
   copy, recovery, search or test is using, and initializing never writes over
   sectors that hold data.
+- **Formatting and wiping can't be undone.** Both show what they'll do and need
+  the disk's name typed. A quick format leaves old files' data in place until
+  it's overwritten (a scan may find them); a wipe overwrites everything in its
+  range. Neither touches the volume Windows runs from, and the whole disk
+  Windows runs from can't be wiped.
 - **Health checks only read.** Windows passes S.M.A.R.T. commands to SATA drives
   only through a handle opened for writing, so the health check opens one; it
   sends three read-only commands through it (read the attributes, read their

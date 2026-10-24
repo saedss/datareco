@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datareco_io::{
-    DeviceList, Disk, DiskTarget, ImageTarget, SectorTarget, SourceSpec,
-    check_disk_for_table_changes, list_devices,
+    DeviceList, Disk, DiskTarget, ImageTarget, SectorTarget, SourceSpec, check_disk_for_changes,
+    list_devices,
 };
 use datareco_partitions::edit::{
     BackupInfo, Change, Operation, Plan, Style, TypeChoice, apply_writes, default_backup_dir,
@@ -21,6 +21,7 @@ use crate::copies::Copies;
 use crate::files::{FileSystems, Recoveries};
 use crate::health::DiskTests;
 use crate::partitions::Searches;
+use crate::volumes::Wipes;
 use crate::{CommandError, OpenSources};
 
 /// The Disk view's table: as it would be after the pending changes.
@@ -47,6 +48,7 @@ pub struct Busy<'a> {
     pub recoveries: State<'a, Recoveries>,
     pub copies: State<'a, Copies>,
     pub tests: State<'a, DiskTests>,
+    pub wipes: State<'a, Wipes>,
 }
 
 /// The source opened anew (and its cache entry dropped), so what's read
@@ -84,7 +86,7 @@ pub fn plan_table(
         SourceSpec::Image(_) => (Some(spec.display_name()), None, Vec::new()),
         SourceSpec::PhysicalDisk(number) => match devices
             .as_ref()
-            .map(|d| check_disk_for_table_changes(*number, d))
+            .map(|d| check_disk_for_changes(*number, d))
         {
             Some(Ok(check)) => (Some(check.confirmation), None, check.volumes),
             Some(Err(e)) => (None, Some(e.to_string()), Vec::new()),
@@ -121,6 +123,7 @@ pub fn apply_table(
     recoveries: State<'_, Recoveries>,
     copies: State<'_, Copies>,
     tests: State<'_, DiskTests>,
+    wipes: State<'_, Wipes>,
     id: String,
     ops: Vec<Operation>,
     confirmation: String,
@@ -131,6 +134,7 @@ pub fn apply_table(
         recoveries,
         copies,
         tests,
+        wipes,
     };
     check_not_busy(&spec, &busy)?;
     // Planned again on a freshly opened disk: what's written must be what
@@ -208,6 +212,7 @@ pub fn undo_table(
     recoveries: State<'_, Recoveries>,
     copies: State<'_, Copies>,
     tests: State<'_, DiskTests>,
+    wipes: State<'_, Wipes>,
     id: String,
     backup: String,
     confirmation: String,
@@ -218,6 +223,7 @@ pub fn undo_table(
         recoveries,
         copies,
         tests,
+        wipes,
     };
     check_not_busy(&spec, &busy)?;
     let disk = Disk::open(&spec)?;
@@ -238,8 +244,8 @@ pub fn undo_table(
 }
 
 /// Refuses while something else uses the disk: a copy to or from it, a
-/// recovery, a lost-partition search, a surface or speed test.
-fn check_not_busy(spec: &SourceSpec, busy: &Busy<'_>) -> Result<(), CommandError> {
+/// recovery, a lost-partition search, a surface or speed test, a wipe.
+pub(crate) fn check_not_busy(spec: &SourceSpec, busy: &Busy<'_>) -> Result<(), CommandError> {
     let devices = list_devices().unwrap_or_default();
     let disks = devices.disks_of_source(spec);
     let uses = |ids: Vec<String>| {
@@ -260,12 +266,14 @@ fn check_not_busy(spec: &SourceSpec, busy: &Busy<'_>) -> Result<(), CommandError
         Some("A lost-partition search")
     } else if uses(busy.tests.sources_in_use()) {
         Some("A surface or speed test")
+    } else if uses(busy.wipes.sources_in_use()) {
+        Some("Wiping")
     } else {
         None
     };
     match what {
         Some(what) => Err(refused(format!(
-            "{what} is using {}. Stop it first, then change the partition table.",
+            "{what} is using {}. Stop it first, then try again.",
             spec.display_name()
         ))),
         None => Ok(()),
@@ -285,7 +293,7 @@ fn write(
     let mut target: Box<dyn SectorTarget> = match spec {
         SourceSpec::PhysicalDisk(number) => {
             let devices: DeviceList = list_devices()?;
-            let check = check_disk_for_table_changes(*number, &devices)?;
+            let check = check_disk_for_changes(*number, &devices)?;
             refuse_backups_on(&devices, *number, &backup_dir)?;
             Box::new(DiskTarget::open(&check, confirmation)?)
         }
