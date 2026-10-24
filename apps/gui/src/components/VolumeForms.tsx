@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FormatPreview, Segment, SpotInfo, WipeProgress, api, driveLetter, toCommandError } from "../api";
 import { formatSize } from "../format";
 import { useActivity } from "../activity";
+import { ConfirmDialog } from "./Dialogs";
 
 /** A partition's sectors, or null for the whole source. */
 type Range = { startLba: number; sectors: number } | null;
@@ -329,15 +330,18 @@ export function LabelForm({ sourceId, segment, onDone, onClose }: VolumeProps) {
 export function LetterForm({ sourceId, segment, onDone, onClose }: VolumeProps) {
   const current = segment.volume ? driveLetter(segment.volume) : null;
   const [used, setUsed] = useState<string[] | null>(null);
-  const [letter, setLetter] = useState(current?.[0] ?? "");
+  const was = current?.[0]?.toUpperCase() ?? "";
+  const [letter, setLetter] = useState(was);
   const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const unchanged = letter === was;
   useEffect(() => {
     api
       .listDevices()
       .then((d) => setUsed(d.volumes.flatMap((v) => v.mountPoints.filter((m) => /^[A-Z]:\\$/i.test(m)).map((m) => m[0].toUpperCase()))))
       .catch(() => setUsed([]));
   }, []);
-  const free = "CDEFGHIJKLMNOPQRSTUVWXYZ".split("").filter((l) => !used?.includes(l) || l === current?.[0]);
+  const free = "CDEFGHIJKLMNOPQRSTUVWXYZ".split("").filter((l) => !used?.includes(l) || l === was);
   async function save() {
     setError(null);
     try {
@@ -363,11 +367,32 @@ export function LetterForm({ sourceId, segment, onDone, onClose }: VolumeProps) 
       </div>
       {error && <p className="problem error">{error}</p>}
       <div className="button-row">
-        <button className="primary" onClick={save} disabled={!used}>
-          Save
+        <button className="primary" onClick={() => setAsking(true)} disabled={!used || unchanged}>
+          Save…
         </button>
         <button onClick={onClose}>Cancel</button>
       </div>
+      {asking && (
+        <ConfirmDialog
+          title={!letter ? `Take away ${was}:?` : was ? `Change ${was}: to ${letter}:?` : `Give it ${letter}:?`}
+          confirm={!letter ? "Take the letter away" : "Change the letter"}
+          onConfirm={save}
+          onClose={() => setAsking(false)}
+        >
+          {!letter ? (
+            <p>
+              It won't show in File Explorer, and programs can't open it, until it gets a letter again. Nothing on it is
+              deleted.
+            </p>
+          ) : was ? (
+            <p>
+              Programs, shortcuts and settings that use {was}:\ won't find it there any more. Nothing on it is deleted.
+            </p>
+          ) : (
+            <p>It will show in File Explorer as {letter}:. Nothing on it changes.</p>
+          )}
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

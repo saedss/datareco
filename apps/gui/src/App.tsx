@@ -24,7 +24,33 @@ export default function App() {
   );
 }
 
-type Dialog = "shortcuts" | "about" | "close" | "exit" | null;
+type Dialog = "shortcuts" | "about" | "close" | "exit" | "restart" | null;
+
+/** What closing a disk, or DataReco, would cut short. */
+type Stake = { tasks: number; changes: number };
+
+/** Says what closing loses, for the dialogs that ask first. */
+function StakeText({ stake }: { stake: Stake }) {
+  const { tasks, changes } = stake;
+  if (tasks === 0 && changes === 0) return <p>Nothing is running any more, and no changes are waiting.</p>;
+  return (
+    <>
+      {tasks > 0 && (
+        <p>
+          {tasks === 1 ? "A task is" : `${tasks} tasks are`} still running or paused, and will stop. Copies and saved
+          searches can carry on later from their map or file, and a move from its journal; a wipe or a clone stopped
+          halfway leaves that disk half done.
+        </p>
+      )}
+      {changes > 0 && (
+        <p>
+          {changes === 1 ? "A partition table change" : `${changes} partition table changes`} you haven't applied will
+          be lost. Nothing has been written for {changes === 1 ? "it" : "them"}.
+        </p>
+      )}
+    </>
+  );
+}
 
 function Shell() {
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -42,8 +68,48 @@ function Shell() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
+  // Partition table changes waiting for Apply, by source.
+  const [pending, setPending] = useState<Record<string, number>>({});
   const nonce = useRef(0);
   const activities = useActivities();
+
+  const notePending = useCallback((id: string, count: number) => {
+    setPending((current) => ((current[id] ?? 0) === count ? current : { ...current, [id]: count }));
+  }, []);
+
+  /** What closing `id` (or, with null, every disk) would cut short. */
+  const stake = (id: string | null): Stake => ({
+    tasks: activities.filter(
+      (a) => (id === null || a.sourceId === id) && (a.state === "running" || a.state === "paused"),
+    ).length,
+    changes:
+      id === null ? Object.values(pending).reduce((sum, n) => sum + n, 0) : (pending[id] ?? 0),
+  });
+  const atStake = (s: Stake) => s.tasks + s.changes > 0;
+
+  // Closing the window (its X, Alt+F4, the taskbar) asks first too.
+  const askOnClose = useRef(false);
+  askOnClose.current = atStake(stake(null));
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let gone = false;
+    try {
+      getCurrentWindow()
+        .onCloseRequested((event) => {
+          if (!askOnClose.current) return;
+          event.preventDefault();
+          setDialog("exit");
+        })
+        .then((stop) => (gone ? stop() : (unlisten = stop)))
+        .catch(() => {});
+    } catch {
+      // Not in the app's window (a plain browser): nothing to ask.
+    }
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     api.listTemplates().then(setTemplates).catch(() => setTemplates(null));
@@ -109,33 +175,41 @@ function Shell() {
     select(imageSelection(path));
   }
 
+  /** Restarting closes DataReco, so it asks first when that loses something. */
   function restartAsAdmin() {
+    if (atStake(stake(null))) {
+      setDialog("restart");
+      return;
+    }
+    restart();
+  }
+
+  function restart() {
     setRestartError(null);
     api.restartAsAdmin(currentId).catch((e) => setRestartError(toCommandError(e).message));
   }
 
-  const busy = (id: string | null) =>
-    activities.some((a) => (id === null || a.sourceId === id) && (a.state === "running" || a.state === "paused"));
-
   function closeCurrent(force = false) {
     if (!currentId) return;
-    if (!force && busy(currentId)) {
+    if (!force && atStake(stake(currentId))) {
       setDialog("close");
       return;
     }
     const id = currentId;
     setOpened((current) => current.filter((s) => s.id !== id));
     setRequests(({ [id]: _, ...rest }) => rest);
+    setPending(({ [id]: _, ...rest }) => rest);
     setCurrentId(null);
   }
 
   function exit(force = false) {
-    if (!force && busy(null)) {
+    if (!force && atStake(stake(null))) {
       setDialog("exit");
       return;
     }
+    // destroy, not close: close would ask again.
     getCurrentWindow()
-      .close()
+      .destroy()
       .catch(() => {});
   }
 
@@ -236,6 +310,7 @@ function Shell() {
                 onReloadTemplates={reloadTemplates}
                 onRestartAsAdmin={restartAsAdmin}
                 onOpenImage={showImage}
+                onPending={(count) => notePending(s.id, count)}
               />
             </div>
           ))}
@@ -276,27 +351,27 @@ function Shell() {
       {dialog === "close" && (
         <ConfirmDialog
           title={`Close ${current?.title ?? "it"}?`}
-          confirm="Close and stop them"
+          confirm="Close it"
           onConfirm={() => closeCurrent(true)}
           onClose={() => setDialog(null)}
         >
-          <p>
-            Tasks are still running or paused on it. Closing stops them; a copy or search that keeps a map or saved file
-            can carry on later from that.
-          </p>
+          <StakeText stake={stake(currentId)} />
         </ConfirmDialog>
       )}
       {dialog === "exit" && (
+        <ConfirmDialog title="Exit DataReco?" confirm="Exit" onConfirm={() => exit(true)} onClose={() => setDialog(null)}>
+          <StakeText stake={stake(null)} />
+        </ConfirmDialog>
+      )}
+      {dialog === "restart" && (
         <ConfirmDialog
-          title="Exit DataReco?"
-          confirm="Exit and stop them"
-          onConfirm={() => exit(true)}
+          title="Restart as administrator?"
+          confirm="Restart"
+          onConfirm={restart}
           onClose={() => setDialog(null)}
         >
-          <p>
-            Tasks are still running or paused. Exiting stops them; a copy or search that keeps a map or saved file can
-            carry on later from that.
-          </p>
+          <p>DataReco closes and opens again with administrator rights.</p>
+          <StakeText stake={stake(null)} />
         </ConfirmDialog>
       )}
     </div>

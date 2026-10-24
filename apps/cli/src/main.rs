@@ -260,13 +260,17 @@ enum Command {
         partition: Option<u32>,
         label: Option<String>,
     },
-    /// Change a volume's drive letter, or take it away with "none".
+    /// Change a volume's drive letter, or take it away with "none". Shows the
+    /// change; makes it only with --apply and the volume named again.
     Letter {
         /// A volume (E:), or a disk with -p.
         source: String,
         #[arg(long, short)]
         partition: Option<u32>,
         letter: String,
+        /// Change it, naming the volume again as given (E:, or disk1 with -p).
+        #[arg(long)]
+        apply: Option<String>,
     },
     /// Move a partition to another place on its disk, block by block. A journal
     /// on another disk lets a move stopped by a power cut or Ctrl+C carry on
@@ -675,7 +679,8 @@ fn run() -> ExitCode {
             source,
             partition,
             letter,
-        } => manage::letter(&source, partition, &letter),
+            apply,
+        } => manage::letter(&source, partition, &letter, apply.as_deref()),
         Command::Table {
             source,
             action,

@@ -81,7 +81,9 @@ other drives and image files. Pick one, and its tabs are:
     and exFAT are made by DataReco and read back to check them; NTFS by
     Windows' own formatter. **Wipe** writes zeros or random bytes over a
     partition or the whole disk, so nothing on it can be recovered. **Change
-    label** and **Change drive letter** do what they say. Formatting or wiping
+    label** and **Change drive letter** do what they say; changing or taking
+    away a drive letter asks first, since programs that use the old one stop
+    finding the drive. Formatting or wiping
     a partition closes only its own volume, so partitions on the disk Windows
     runs from can be formatted too (not Windows' own, and the whole disk can't
     be wiped).
@@ -180,7 +182,8 @@ datareco migrate disk0 --to disk2 --apply disk2        # copies them, used space
 datareco migrate disk1 --to disk2 --space-after 2 --apply disk2   # spare room after partition 2
 datareco clone-partition disk1 -p 2 --to disk2 --apply disk2      # into free space on disk2
 datareco label E: "Holiday 2026"                       # or without a label to remove it
-datareco letter E: F                                   # or "none" to take the letter away
+datareco letter E: F                                   # shows the change; or "none" to take it away
+datareco letter E: F --apply E:                        # changes it
 datareco find backup.img --text "IMPORTANT" --ignore-case
 datareco find disk1 --hex "55 AA" -n 10
 datareco ls disk1 -p 2 -r              # every file on partition 2, deleted ones too
@@ -219,7 +222,13 @@ or an image file path.
 ## Safety first
 
 - **Read-only by default.** DataReco never writes to a disk unless you ask it to
-  and type the disk's name: copying onto it, or applying partition table changes.
+  and type the disk's name: applying partition table changes or undoing them,
+  formatting, wiping, moving, resizing, cloning, or copying onto a disk. Each
+  shows what it will do first. Changing a drive letter asks too.
+- **Nothing is cut short without asking.** Closing a disk, exiting (the window's
+  close button included) or restarting as administrator asks first while
+  something still runs, or while partition table changes wait to be applied.
+  Stop never asks: on a wipe or a copy, stopping right away is the safe thing.
 - **Recover to a different disk.** Saving recovered files to the source disk can
   overwrite the very data you are trying to get back, so DataReco blocks it. The
   same goes for image and map files when copying.
