@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FormatPreview, Segment, SpotInfo, WipeProgress, api, driveLetter, toCommandError } from "../api";
 import { formatSize } from "../format";
+import { useActivity } from "../activity";
 
 /** A partition's sectors, or null for the whole source. */
 type Range = { startLba: number; sectors: number } | null;
@@ -214,6 +215,20 @@ export function WipeForm({ sourceId, what, range, onDone, onClose }: Props) {
 
   const percent = progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
   const ready = spot && typed.trim().toLowerCase() === spot.confirmation.toLowerCase();
+  useActivity(
+    `${sourceId}:wipe`,
+    sourceId,
+    progress
+      ? {
+          label: `Wipe ${what}`,
+          detail: `${formatSize(progress.done)} of ${formatSize(progress.total)}`,
+          percent: Math.round(percent * 10) / 10,
+          state: error ? "failed" : running ? "running" : progress.finished ? "finished" : "stopped",
+          view: "partitions",
+        }
+      : null,
+    { stop: () => (stopping.current = true) },
+  );
   return (
     <div className="confirm-erase">
       <h2>Wipe {what}</h2>

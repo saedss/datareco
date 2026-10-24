@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { FoundVolume, RawStatus, ScanStatus, api, toCommandError } from "../api";
+import { FoundVolume, ScanStatus, api, toCommandError } from "../api";
+import { useActivity } from "../activity";
 import { formatNumber, formatSize } from "../format";
-import { RawScanPanel } from "./RawScanPanel";
 
 type Props = {
   sourceId: string;
@@ -10,23 +10,28 @@ type Props = {
   /** The latest scan, kept by the editor so the file browser can offer its volumes. */
   status: ScanStatus | null;
   onStatus: (status: ScanStatus) => void;
-  /** The latest raw scan (files found by their contents). */
-  raw: RawStatus | null;
-  onRaw: (status: RawStatus) => void;
   /** Opens a found volume in the file browser, by its volume key. */
   onBrowse: (key: string) => void;
-  /** Shows a byte offset of the source in the sector view. */
+  /** Shows a byte offset of the source in the hex editor. */
   onShowInSectors: (offset: number) => void;
 };
 
 const SCAN_FILES = [{ name: "DataReco scan", extensions: ["drscan"] }];
 
-/** Scans for volumes, lost and damaged ones included, and lists them best first. */
-export function ScanView({ sourceId, sectorSize, status, onStatus, raw, onRaw, onBrowse, onShowInSectors }: Props) {
+/** Searches for drives (volumes), lost and damaged ones included, and lists them best first. */
+export function ScanView({ sourceId, sectorSize, status, onStatus, onBrowse, onShowInSectors }: Props) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const pausing = useRef(false);
+
+  // Closing the disk pauses the search.
+  useEffect(
+    () => () => {
+      pausing.current = true;
+    },
+    [],
+  );
 
   async function run(first: () => Promise<ScanStatus>) {
     pausing.current = false;
@@ -77,26 +82,56 @@ export function ScanView({ sourceId, sectorSize, status, onStatus, raw, onRaw, o
   const progress = status?.progress;
   const paused = !running && progress && !progress.done;
   const percent = progress && progress.total > 0 ? Math.min(100, (progress.position / progress.total) * 100) : 0;
+  const deep = progress?.mode === "full";
+
+  useActivity(
+    `${sourceId}:scan`,
+    sourceId,
+    progress
+      ? {
+          label: deep ? "Deep search for lost drives" : "Quick search for lost drives",
+          detail: progress.done
+            ? `${status?.volumes?.length ?? 0} found`
+            : `${formatSize(progress.position)} of ${formatSize(progress.total)}`,
+          percent: Math.round(percent * 10) / 10,
+          state: error ? "failed" : running ? "running" : progress.done ? "finished" : "paused",
+          view: "recover",
+        }
+      : null,
+    {
+      pause: () => (pausing.current = true),
+      resume: () => run(() => api.continueScan(sourceId)),
+    },
+  );
 
   return (
     <div className="scan-view">
       <div className="toolbar">
         <div className="toolbar-group">
-          <button className="primary" disabled={running} onClick={() => run(() => api.startScan(sourceId, "quick"))}>
-            Quick scan
+          <button
+            className="primary"
+            disabled={running}
+            onClick={() => run(() => api.startScan(sourceId, "quick"))}
+            title="Seconds: the partition table, where drives usually start, and the backups at the disk's end"
+          >
+            Quick search
           </button>
-          <button disabled={running} onClick={() => run(() => api.startScan(sourceId, "full"))}>
-            Full scan
+          <button
+            disabled={running}
+            onClick={() => run(() => api.startScan(sourceId, "full"))}
+            title="Reads every sector: slow, finds more"
+          >
+            Deep search (every sector)
           </button>
           {running && <button onClick={() => (pausing.current = true)}>Pause</button>}
-          {paused && <button onClick={() => run(() => api.continueScan(sourceId))}>Resume</button>}
+          {paused && <button onClick={() => run(() => api.continueScan(sourceId))}>Carry on</button>}
         </div>
         <div className="toolbar-group">
           <button disabled={running || !status} onClick={saveScan}>
-            Save scan…
+            Save the search…
           </button>
           <button disabled={running} onClick={openScan}>
-            Open saved scan…
+            Open a saved search…
           </button>
         </div>
       </div>
@@ -109,17 +144,12 @@ export function ScanView({ sourceId, sectorSize, status, onStatus, raw, onRaw, o
       {notice && <p className="muted small scan-notice">{notice}</p>}
 
       {!status && !running && (
-        <div className="notice">
-          <h2>Find lost and damaged volumes</h2>
-          <p>
-            A <strong>quick scan</strong> checks the partition table, where volumes usually start, and the disk's last
-            sectors, where backup boot sectors are. It takes seconds.
-          </p>
-          <p>
-            A <strong>full scan</strong> reads every sector. It also finds volumes whose boot sector, partition entry or
-            FAT is gone, and NTFS files from before a format. You can pause it, save it and carry on later.
-          </p>
-        </div>
+        <p className="muted small">
+          The <strong>quick search</strong> takes seconds: it checks the partition table, where drives usually start,
+          and the backup boot sectors at the disk's end. The <strong>deep search</strong> reads every sector: it also
+          finds drives whose boot sector, partition entry or FAT is gone, and NTFS files from before a format. It can be
+          paused, saved and carried on later.
+        </p>
       )}
 
       {progress && (
@@ -145,8 +175,6 @@ export function ScanView({ sourceId, sectorSize, status, onStatus, raw, onRaw, o
         />
       )}
 
-      <RawScanPanel sourceId={sourceId} status={raw} onStatus={onRaw} onBrowse={onBrowse} />
-
     </div>
   );
 }
@@ -161,7 +189,7 @@ type ListProps = {
 
 function VolumeList({ volumes, generation, sectorSize, onBrowse, onShowInSectors }: ListProps) {
   if (volumes.length === 0) {
-    return <p className="muted scan-empty">No volumes found. A full scan looks at every sector and finds more.</p>;
+    return <p className="muted scan-empty">No drives found. The deep search reads every sector and finds more.</p>;
   }
   return (
     <ol className="found-volumes">
@@ -180,7 +208,7 @@ function VolumeList({ volumes, generation, sectorSize, onBrowse, onShowInSectors
               <button className="primary" onClick={() => onBrowse(`scan:${generation}:${i}`)}>
                 Browse files
               </button>
-              <button onClick={() => onShowInSectors(volume.offset)}>Show in sectors</button>
+              <button onClick={() => onShowInSectors(volume.offset)}>Show in the hex editor</button>
             </span>
           </div>
           <p className="muted small">

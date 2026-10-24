@@ -15,6 +15,7 @@ import {
   toCommandError,
 } from "../api";
 import { formatNumber, formatSize, formatTime, hex } from "../format";
+import { useActivity } from "../activity";
 
 type Props = {
   sourceId: string;
@@ -178,6 +179,22 @@ export function FileBrowser({ sourceId, sectorSize, scan, raw, request, onShowIn
     }
   }
 
+  useActivity(
+    `${sourceId}:recover`,
+    sourceId,
+    recovery
+      ? {
+          label: `Recover files to ${recovery.destination}`,
+          detail: recovery.progress
+            ? `${formatNumber(recovery.progress.files)} files · ${formatSize(recovery.progress.bytes)}`
+            : "starting",
+          percent: null,
+          state: recovery.error ? "failed" : recovery.running ? "running" : "finished",
+          view: "files",
+        }
+      : null,
+  );
+
   const noReadable = volumes && !volumes.some((v) => v.readable) && scanVolumes.length === 0 && !raw?.volume;
 
   if (noReadable) {
@@ -186,7 +203,7 @@ export function FileBrowser({ sourceId, sectorSize, scan, raw, request, onShowIn
         <h2>No volume to browse</h2>
         <p>
           {volumes.length === 0
-            ? "No file system was found in the partition table. A scan (Scan, at the top) looks for lost and damaged volumes."
+            ? "No file system was found in the partition table. Recover data (at the top) searches for lost and damaged drives."
             : `DataReco reads FAT, exFAT, NTFS, ext2/3/4, HFS+, APFS and btrfs so far; this source has ${volumes.map((v) => v.name).join(", ")}. A scan may find others.`}
         </p>
       </div>
@@ -552,7 +569,7 @@ function FileDetails({ sourceId, volumeKey, volume, sectorSize, entry, recoverin
                 {stored.length > 1 && <>, in {formatNumber(stored.length)} pieces</>}
               </p>
               <div className="button-row">
-                <button onClick={() => onShowInSectors(first.offset, first.length)}>Show in sectors</button>
+                <button onClick={() => onShowInSectors(first.offset, first.length)}>Show in the hex editor</button>
               </div>
             </>
           )}

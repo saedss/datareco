@@ -5,93 +5,108 @@ import {
   CloneReading,
   DiskCopyPreview,
   PartitionCopyPreview,
-  Segment,
+  PartitionTable,
   api,
   toCommandError,
 } from "../api";
+import { useActivity } from "../activity";
 import { formatNumber, formatSize } from "../format";
 
-type SectionProps = {
-  sourceId: string;
-  /** The partition picked on the map, to copy it alone. */
-  segment: Segment | null;
-  /** "partition 2 (E: Photos)". */
-  segmentWhat: string | null;
-  /** Why nothing can be copied now, if so. */
-  blocked: string | null;
-};
-
-/** Copying partitions onto another disk: the whole disk (moving Windows,
- *  for the disk it runs from), or one partition into free space. */
-export function CopySection({ sourceId, segment, segmentWhat, blocked }: SectionProps) {
+/** The disks a copy could go onto, loaded once per source. */
+function useCloneInfo(sourceId: string): { info: CloneInfo | null; error: string | null } {
   const [info, setInfo] = useState<CloneInfo | null>(null);
-  const [form, setForm] = useState<"disk" | "partition" | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    setForm(null);
-    setMessage(null);
     api
       .cloneInfo(sourceId)
       .then(setInfo)
-      .catch(() => setInfo(null));
+      .catch((e) => setError(toCommandError(e).message));
   }, [sourceId]);
-  if (sourceId.startsWith("volume:")) return null;
-  const windows = info?.windows ?? false;
-  const done = (text: string) => {
-    setForm(null);
-    setMessage(text);
-  };
-  const partition = segment?.kind === "partition" ? segment : null;
+  return { info, error };
+}
 
+/** Copying every partition of the disk onto another disk, used space only
+ *  (moving Windows, for the disk it runs from). */
+export function CloneDiskPanel({ sourceId, blocked }: { sourceId: string; blocked: string | null }) {
+  const { info, error } = useCloneInfo(sourceId);
+  const [message, setMessage] = useState<string | null>(null);
+  if (sourceId.startsWith("volume:")) {
+    return <p className="muted">To clone it, open the disk this volume is on (above it, on the left).</p>;
+  }
   return (
-    <section className="disk-section">
-      <h2>Copy to another disk</h2>
-      <p className="muted small">
-        Copies partitions onto another disk, only the space their files use, so a smaller disk will do if they fit.
-        This disk is only read.
-        {windows &&
-          " It's the disk Windows runs from: its copy is one Windows starts from, so you can move Windows to a new disk."}
-      </p>
+    <>
       {blocked && <p className="problem warning">{blocked}</p>}
+      {error && <p className="problem error">{error}</p>}
       {message && <p className="notice-line small">{message}</p>}
-      <div className="button-row">
-        <button
-          className="primary"
-          disabled={!!blocked || !info || form !== null}
-          onClick={() => {
-            setMessage(null);
-            setForm("disk");
-          }}
-        >
-          {windows ? "Move Windows to another disk…" : "Copy this disk…"}
-        </button>
-        {partition && (
-          <button
-            disabled={!!blocked || !info || form !== null}
-            onClick={() => {
-              setMessage(null);
-              setForm("partition");
-            }}
-          >
-            Copy {segmentWhat ?? "the partition"} only…
-          </button>
-        )}
+      {!info && !error && <p className="muted small">Looking for disks…</p>}
+      {info && !blocked && <CopyDiskForm sourceId={sourceId} info={info} onDone={setMessage} />}
+    </>
+  );
+}
+
+/** Copying one partition into free space on another disk. */
+export function ClonePartitionPanel({
+  sourceId,
+  sectorSize,
+  startLba,
+  blocked,
+}: {
+  sourceId: string;
+  sectorSize: number;
+  /** The partition to start with, by its first sector. */
+  startLba: number | null;
+  blocked: string | null;
+}) {
+  const { info, error } = useCloneInfo(sourceId);
+  const [table, setTable] = useState<PartitionTable | null>(null);
+  const [picked, setPicked] = useState<number | null>(startLba);
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .readPartitions(sourceId)
+      .then(setTable)
+      .catch(() => setTable(null));
+  }, [sourceId]);
+  useEffect(() => {
+    if (startLba !== null) setPicked(startLba);
+  }, [startLba]);
+  if (sourceId.startsWith("volume:")) {
+    return <p className="muted">To copy it, open the disk this volume is on (above it, on the left).</p>;
+  }
+  const partitions = table?.partitions.filter((p) => p.kind !== "extended") ?? [];
+  const chosen = partitions.find((p) => p.startLba === picked) ?? null;
+  const what = chosen
+    ? `partition ${chosen.number} (${chosen.fileSystem?.label ?? chosen.fileSystem?.name ?? chosen.typeName}, ${formatSize(chosen.sectors * sectorSize)})`
+    : "";
+  return (
+    <>
+      {blocked && <p className="problem warning">{blocked}</p>}
+      {error && <p className="problem error">{error}</p>}
+      {message && <p className="notice-line small">{message}</p>}
+      <div className="edit-row">
+        <label>
+          Partition{" "}
+          <select value={picked ?? ""} onChange={(e) => setPicked(e.target.value === "" ? null : Number(e.target.value))}>
+            <option value="">Pick one…</option>
+            {partitions.map((p) => (
+              <option key={p.startLba} value={p.startLba}>
+                {p.number}: {p.fileSystem?.label ?? p.fileSystem?.name ?? p.typeName} · {formatSize(p.sectors * sectorSize)}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
-      {form === "disk" && info && (
-        <CopyDiskForm sourceId={sourceId} info={info} onDone={done} onClose={() => setForm(null)} />
-      )}
-      {form === "partition" && info && partition && (
+      {info && chosen && !blocked && (
         <CopyPartitionForm
-          key={partition.startLba}
+          key={chosen.startLba}
           sourceId={sourceId}
           info={info}
-          segment={partition}
-          what={segmentWhat ?? "the partition"}
-          onDone={done}
-          onClose={() => setForm(null)}
+          startLba={chosen.startLba}
+          what={what}
+          onDone={setMessage}
         />
       )}
-    </section>
+    </>
   );
 }
 
@@ -119,12 +134,27 @@ function ReadingNotes({ reading }: { reading: CloneReading }) {
   );
 }
 
-/** Runs a copy to the end, showing progress; Stop drops it. */
-function useCopyRun(sourceId: string) {
+/** Runs a copy to the end, showing progress; Stop drops it. `label` names
+ *  it in Activity. */
+function useCopyRun(sourceId: string, label: string) {
   const [progress, setProgress] = useState<CloneProgress | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const stopping = useRef(false);
+  useActivity(
+    `${sourceId}:clone`,
+    sourceId,
+    progress
+      ? {
+          label,
+          detail: `${progress.description} · ${formatSize(progress.done)} of ${formatSize(progress.total)}`,
+          percent: progress.total > 0 ? Math.round((progress.done / progress.total) * 1000) / 10 : null,
+          state: error ? "failed" : running ? "running" : progress.finished ? "finished" : "stopped",
+          view: "backup",
+        }
+      : null,
+    { stop: () => (stopping.current = true) },
+  );
   // Leaving stops it.
   useEffect(
     () => () => {
@@ -176,17 +206,16 @@ type DiskFormProps = {
   sourceId: string;
   info: CloneInfo;
   onDone: (message: string) => void;
-  onClose: () => void;
 };
 
-function CopyDiskForm({ sourceId, info, onDone, onClose }: DiskFormProps) {
+function CopyDiskForm({ sourceId, info, onDone }: DiskFormProps) {
   const usable = info.targets.filter((t) => !t.problem);
   const [target, setTarget] = useState<number | null>(usable[0]?.number ?? null);
   const [newIds, setNewIds] = useState(!info.windows);
   const [spaceAfter, setSpaceAfter] = useState<number | null>(null);
   const [preview, setPreview] = useState<DiskCopyPreview | null>(null);
   const [typed, setTyped] = useState("");
-  const copy = useCopyRun(sourceId);
+  const copy = useCopyRun(sourceId, `${info.windows ? "Move Windows" : "Clone"} onto Disk ${target ?? "?"}`);
 
   useEffect(() => {
     setPreview(null);
@@ -222,7 +251,7 @@ function CopyDiskForm({ sourceId, info, onDone, onClose }: DiskFormProps) {
 
   return (
     <div className="confirm-erase move-box">
-      <h2>{info.windows ? "Move Windows to another disk" : "Copy this disk to another"}</h2>
+      <h2>{info.windows ? "Move Windows to a new disk" : "Clone onto another disk"}</h2>
       {info.targets.length === 0 && <p className="problem warning">There's no other disk to copy onto.</p>}
       <div className="edit-row">
         <label>
@@ -313,12 +342,9 @@ function CopyDiskForm({ sourceId, info, onDone, onClose }: DiskFormProps) {
           </button>
         ) : (
           <button className="danger" disabled={!ready} onClick={start}>
-            {info.windows ? "Move Windows" : "Copy"}
+            {info.windows ? "Move Windows" : "Clone"}
           </button>
         )}
-        <button onClick={onClose} disabled={copy.running}>
-          Close
-        </button>
       </div>
     </div>
   );
@@ -327,32 +353,32 @@ function CopyDiskForm({ sourceId, info, onDone, onClose }: DiskFormProps) {
 type PartitionFormProps = {
   sourceId: string;
   info: CloneInfo;
-  segment: Segment;
+  /** The partition, by its first sector. */
+  startLba: number;
   what: string;
   onDone: (message: string) => void;
-  onClose: () => void;
 };
 
-function CopyPartitionForm({ sourceId, info, segment, what, onDone, onClose }: PartitionFormProps) {
+function CopyPartitionForm({ sourceId, info, startLba, what, onDone }: PartitionFormProps) {
   const usable = info.targets.filter((t) => !t.problem);
   const [target, setTarget] = useState<number | null>(usable[0]?.number ?? null);
   const [at, setAt] = useState<number | null>(null);
   const [preview, setPreview] = useState<PartitionCopyPreview | null>(null);
   const [typed, setTyped] = useState("");
-  const copy = useCopyRun(sourceId);
+  const copy = useCopyRun(sourceId, `Copy ${what} onto Disk ${target ?? "?"}`);
 
   useEffect(() => {
     setPreview(null);
     if (target == null) return;
     let current = true;
     api
-      .previewPartitionCopy(sourceId, segment.startLba, target, at)
+      .previewPartitionCopy(sourceId, startLba, target, at)
       .then((p) => current && setPreview(p))
       .catch((e) => current && copy.setError(toCommandError(e).message));
     return () => {
       current = false;
     };
-  }, [sourceId, segment.startLba, target, at]);
+  }, [sourceId, startLba, target, at]);
 
   const targetName = info.targets.find((t) => t.number === target)?.name ?? "the disk";
   const sectorSize = info.targets.find((t) => t.number === target)?.sectorSize ?? 512;
@@ -365,7 +391,7 @@ function CopyPartitionForm({ sourceId, info, segment, what, onDone, onClose }: P
   async function start() {
     if (target == null || preview?.at == null) return;
     const place = preview.at;
-    const finished = await copy.run(() => api.startPartitionCopy(sourceId, segment.startLba, target, place, typed));
+    const finished = await copy.run(() => api.startPartitionCopy(sourceId, startLba, target, place, typed));
     if (!finished) return;
     onDone(
       `Copied ${what} onto ${targetName}. Its old partition table is saved in ${finished.backup ?? "the backups folder"}; "Undo a change" on ${targetName} takes the copy off again.`,
@@ -452,9 +478,6 @@ function CopyPartitionForm({ sourceId, info, segment, what, onDone, onClose }: P
             Copy
           </button>
         )}
-        <button onClick={onClose} disabled={copy.running}>
-          Close
-        </button>
       </div>
     </div>
   );

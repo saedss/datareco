@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MovePreview, MoveProgress, ResizeLimits, Segment, api, toCommandError } from "../api";
 import { formatSize } from "../format";
+import { useActivity } from "../activity";
 
 type MoveProps = {
   sourceId: string;
@@ -145,6 +146,21 @@ export function MoveForm({
       : progress?.phase === "writingTable"
         ? "writing the partition table"
         : "copying";
+
+  useActivity(
+    `${sourceId}:move`,
+    sourceId,
+    progress && (running || progress.finished || !!error || progress.done > 0)
+      ? {
+          label: segment ? (aligning ? `Align ${what} to 1 MiB` : `Move ${what}`) : "Carry on the unfinished move",
+          detail: `${formatSize(progress.done)} of ${formatSize(progress.total)} · ${phase}`,
+          percent: Math.round(percent * 10) / 10,
+          state: error ? "failed" : running ? "running" : progress.finished ? "finished" : "paused",
+          view: "partitions",
+        }
+      : null,
+    { stop: () => (stopping.current = true) },
+  );
 
   return (
     <div className="confirm-erase move-box">

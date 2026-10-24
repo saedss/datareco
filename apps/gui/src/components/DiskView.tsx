@@ -18,7 +18,7 @@ import { formatNumber, formatSize } from "../format";
 import { ApplyBox, CreateForm, EditActions, EditForm, FieldForm, PendingChanges, UndoBox } from "./TableEditing";
 import { FormatForm, LabelForm, LetterForm, WipeForm, rangeOf, typeNote } from "./VolumeForms";
 import { MoveForm, ResizeForm } from "./MoveForms";
-import { CopySection } from "./CloneForms";
+import { useActivity } from "../activity";
 
 type Props = {
   sourceId: string;
@@ -30,14 +30,25 @@ type Props = {
   onOps: (ops: Operation[]) => void;
   /** Called once a table change is written, so other views read it again. */
   onTableChanged: () => void;
-  /** Shows a byte offset of the source in the sector view. */
+  /** Shows a byte offset of the source in the hex editor. */
   onShowInSectors: (offset: number) => void;
+  /** Copies a partition to another disk (in Back up & clone). */
+  onCopyPartition: (startLba: number) => void;
 };
 
-/** The disk view: a map of the disk's partitions and free space, changes to
- *  its partition table (written only on Apply), the drive's health, a
- *  surface test and a read speed test. */
-export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTableChanged, onShowInSectors }: Props) {
+/** The Partitions tab: a map of the disk's partitions and free space, and
+ *  changes to them: the table (written only on Apply), formatting, wiping,
+ *  moving and resizing. */
+export function DiskView({
+  sourceId,
+  sourceName,
+  sectorSize,
+  ops,
+  onOps,
+  onTableChanged,
+  onShowInSectors,
+  onCopyPartition,
+}: Props) {
   const [view, setView] = useState<TableView | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -48,7 +59,6 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
   const [version, setVersion] = useState(0);
   const [unfinishedMove, setUnfinishedMove] = useState<UnfinishedMove | null>(null);
   const latest = useRef(0);
-  const isImage = sourceId.startsWith("image:");
 
   const loadMap = useCallback(() => {
     const request = ++latest.current;
@@ -173,7 +183,7 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
             <SegmentTable map={map} sectorSize={sectorSize} selected={selected} onSelect={select} />
             {segment && ops.length === 0 && (
               <div className="button-row">
-                <button onClick={() => onShowInSectors(segment.startLba * sectorSize)}>Show in sectors</button>
+                <button onClick={() => onShowInSectors(segment.startLba * sectorSize)}>Show in the hex editor</button>
               </div>
             )}
             {map.table.problems.map((problem) => (
@@ -212,6 +222,7 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
                   setWriteError(null);
                   setForm(f);
                 }}
+                onCopy={(s) => onCopyPartition(s.startLba)}
               />
             )}
             {form?.kind === "create" && (
@@ -331,36 +342,13 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
           </>
         )}
       </section>
-
-      <CopySection
-        sourceId={sourceId}
-        segment={segment?.kind === "partition" && ops.length === 0 ? segment : null}
-        segmentWhat={segment ? describe(segment) : null}
-        blocked={
-          unfinishedMove
-            ? "A partition move on this disk didn't finish: carry it on before copying."
-            : null
-        }
-      />
-
-      {!isImage && <HealthSection sourceId={sourceId} />}
-
-      <SurfaceSection
-        sourceId={sourceId}
-        sectorSize={sectorSize}
-        segment={segment?.kind === "partition" && ops.length === 0 ? segment : null}
-        segmentName={segment && map ? segmentName(segment, map.table) : null}
-        onShowInSectors={onShowInSectors}
-      />
-
-      {!isImage && <SpeedSection sourceId={sourceId} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------- the map
 
-function tableSummary(table: PartitionTable): string {
+export function tableSummary(table: PartitionTable): string {
   const size = formatSize(table.diskSectors * table.sectorSize);
   switch (table.kind) {
     case "mbr":
@@ -373,7 +361,7 @@ function tableSummary(table: PartitionTable): string {
 }
 
 /** What a segment is called on the map: its drive letter, or what it is. */
-function segmentName(segment: Segment, table: PartitionTable): string {
+export function segmentName(segment: Segment, table: PartitionTable): string {
   const letter = segment.volume ? driveLetter(segment.volume) : null;
   switch (segment.kind) {
     case "free":
@@ -433,7 +421,7 @@ type MapProps = {
 /** The disk as a bar: each segment as wide as its share of the disk (with a
  *  minimum, so small partitions stay visible); logical partitions inside a
  *  box for the extended partition. */
-function DiskBar({ map, sectorSize, selected, onSelect }: MapProps) {
+export function DiskBar({ map, sectorSize, selected, onSelect }: MapProps) {
   const groups: { logical: boolean; items: [Segment, number][] }[] = [];
   map.segments.forEach((segment, index) => {
     const last = groups[groups.length - 1];
@@ -488,7 +476,7 @@ function DiskBar({ map, sectorSize, selected, onSelect }: MapProps) {
   );
 }
 
-function SegmentTable({ map, sectorSize, selected, onSelect }: MapProps) {
+export function SegmentTable({ map, sectorSize, selected, onSelect }: MapProps) {
   return (
     <div className="disk-table-box">
       <table className="file-table disk-table">
@@ -549,7 +537,7 @@ function SegmentTable({ map, sectorSize, selected, onSelect }: MapProps) {
 const VERDICT: Record<string, string> = { good: "Good", caution: "Caution", bad: "Bad", unknown: "Unknown" };
 const LEVEL_CLASS: Record<string, string> = { bad: "error", caution: "warning", info: "info" };
 
-function HealthSection({ sourceId }: { sourceId: string }) {
+export function HealthSection({ sourceId }: { sourceId: string }) {
   const [health, setHealth] = useState<DiskHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
@@ -717,13 +705,14 @@ const SPEED_CLASS: Record<string, string> = {
 type SurfaceProps = {
   sourceId: string;
   sectorSize: number;
-  /** The partition picked on the map, to test only it. */
-  segment: Segment | null;
-  segmentName: string | null;
+  /** The partitions that can be tested on their own. */
+  partitions: { number: number; name: string }[];
   onShowInSectors: (offset: number) => void;
 };
 
-function SurfaceSection({ sourceId, sectorSize, segment, segmentName, onShowInSectors }: SurfaceProps) {
+export function SurfaceSection({ sourceId, sectorSize, partitions, onShowInSectors }: SurfaceProps) {
+  const [picked, setPicked] = useState<number | null>(null);
+  const pickedName = partitions.find((p) => p.number === picked)?.name ?? null;
   const [progress, setProgress] = useState<SurfaceProgress | null>(null);
   const [running, setRunning] = useState(false);
   const [ended, setEnded] = useState(false);
@@ -779,6 +768,27 @@ function SurfaceSection({ sourceId, sectorSize, segment, segmentName, onShowInSe
       ? ((progress.sectors - progress.tested) * sectorSize) / progress.bytesPerSecond
       : null;
 
+  useActivity(
+    `${sourceId}:surface`,
+    sourceId,
+    progress
+      ? {
+          label: what ? `Surface test of ${what}` : "Surface test",
+          detail:
+            `${formatSize(progress.tested * sectorSize)} of ${formatSize(progress.sectors * sectorSize)}` +
+            (progress.unreadableSectors > 0 ? ` · ${formatSize(progress.unreadableSectors * sectorSize)} unreadable` : ""),
+          percent: Math.round(percent * 10) / 10,
+          state: error ? "failed" : running ? "running" : progress.done ? "finished" : ended ? "stopped" : "paused",
+          view: "health",
+        }
+      : null,
+    {
+      pause: () => (pausing.current = true),
+      resume: () => run(() => api.continueSurfaceTest(sourceId)),
+      stop,
+    },
+  );
+
   return (
     <section className="disk-section">
       <div className="disk-section-head">
@@ -786,16 +796,33 @@ function SurfaceSection({ sourceId, sectorSize, segment, segmentName, onShowInSe
       </div>
       <p className="muted small">
         Reads every sector once and times it, to find slow and unreadable areas. Nothing is written or repaired. On a
-        drive that's failing, copy it first (Copy, top right): every read wears it further.
+        drive that's failing, rescue it first (Back up &amp; clone): every read wears it further.
       </p>
       <div className="button-row">
         <button className="primary" disabled={running} onClick={() => start(null, "the whole disk")}>
           Test the whole disk
         </button>
-        {segment?.partition != null && (
-          <button disabled={running} onClick={() => start(segment.partition, segmentName ?? "the partition")}>
-            Test {segmentName ?? `partition ${segment.partition}`} only
-          </button>
+        {partitions.length > 0 && (
+          <>
+            <select
+              aria-label="Partition to test on its own"
+              value={picked ?? ""}
+              disabled={running}
+              onChange={(e) => setPicked(e.target.value === "" ? null : Number(e.target.value))}
+            >
+              <option value="">Or one partition…</option>
+              {partitions.map((p) => (
+                <option key={p.number} value={p.number}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {picked !== null && (
+              <button disabled={running} onClick={() => start(picked, pickedName ?? `partition ${picked}`)}>
+                Test {pickedName ?? `partition ${picked}`} only
+              </button>
+            )}
+          </>
         )}
         {running && <button onClick={() => (pausing.current = true)}>Pause</button>}
         {paused && <button onClick={() => run(() => api.continueSurfaceTest(sourceId))}>Carry on</button>}
@@ -855,8 +882,9 @@ function SurfaceSection({ sourceId, sectorSize, segment, segmentName, onShowInSe
             <div className="surface-bad">
               <p>
                 <strong>{formatSize(progress.unreadableSectors * sectorSize)}</strong> couldn't be read, in{" "}
-                {formatNumber(progress.badRangeCount)} place{progress.badRangeCount === 1 ? "" : "s"}. Copy this disk
-                and recover from the copy: Copy goes back over unreadable areas in smaller pieces.
+                {formatNumber(progress.badRangeCount)} place{progress.badRangeCount === 1 ? "" : "s"}. Rescue this
+                drive into an image (Back up &amp; clone) and recover from that: the rescue copy goes back over
+                unreadable areas in smaller pieces.
               </p>
               <ul>
                 {progress.badRanges.slice(0, 20).map((range) => (
@@ -891,7 +919,7 @@ function duration(seconds: number): string {
 
 const PLACE: Record<string, string> = { start: "At the start", middle: "In the middle", end: "At the end" };
 
-function SpeedSection({ sourceId }: { sourceId: string }) {
+export function SpeedSection({ sourceId }: { sourceId: string }) {
   const [status, setStatus] = useState<SpeedStatus | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -923,6 +951,21 @@ function SpeedSection({ sourceId }: { sourceId: string }) {
       setRunning(false);
     }
   }
+
+  useActivity(
+    `${sourceId}:speed`,
+    sourceId,
+    running || status
+      ? {
+          label: "Read speed test",
+          detail: "",
+          percent: null,
+          state: error ? "failed" : running ? "running" : "finished",
+          view: "health",
+        }
+      : null,
+    { stop: () => (stopping.current = true) },
+  );
 
   return (
     <section className="disk-section">
