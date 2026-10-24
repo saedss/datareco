@@ -13,7 +13,10 @@ export type EditForm =
   /** `segment` null: the whole disk. */
   | { kind: "wipe"; segment: Segment | null }
   | { kind: "label"; segment: Segment }
-  | { kind: "letter"; segment: Segment };
+  | { kind: "letter"; segment: Segment }
+  | { kind: "move"; segment: Segment; align?: boolean }
+  | { kind: "resize"; segment: Segment }
+  | { kind: "resumeMove" };
 
 type ActionsProps = {
   view: TableView;
@@ -22,12 +25,14 @@ type ActionsProps = {
   disabled: boolean;
   /** Table changes waiting: formatting and wiping wait until they're written. */
   pending: number;
+  /** A physical disk (Windows can resize its NTFS partitions). */
+  isDisk: boolean;
   onOp: (op: Operation) => void;
   onForm: (form: EditForm) => void;
 };
 
 /** What can be done to the selected part of the disk, and to the whole disk. */
-export function EditActions({ view, segment, disabled, pending, onOp, onForm }: ActionsProps) {
+export function EditActions({ view, segment, sectorSize, disabled, pending, isDisk, onOp, onForm }: ActionsProps) {
   const table = view.map.table;
   const partition = segment?.partition != null ? table.partitions.find((p) => p.number === segment.partition) : null;
   const extended = table.partitions.find((p) => p.kind === "extended");
@@ -97,12 +102,24 @@ export function EditActions({ view, segment, disabled, pending, onOp, onForm }: 
           segment.volume && button("Change drive letter…", () => onForm({ kind: "letter", segment })),
         ]
       : [];
+  const ntfs =
+    partition?.fileSystem?.kind === "ntfs" || partition?.fileSystem?.kind === "refs" || segment?.volume?.fileSystem === "NTFS";
+  const misaligned = segment?.kind === "partition" && (segment.startLba * sectorSize) % (1 << 20) !== 0;
+  const placeActions =
+    pending === 0 && segment?.kind === "partition"
+      ? [
+          button("Move…", () => onForm({ kind: "move", segment }), "Copy it block by block to another place on the disk"),
+          misaligned && button("Align to 1 MiB…", () => onForm({ kind: "move", segment, align: true })),
+          isDisk && ntfs && button("Resize…", () => onForm({ kind: "resize", segment }), "Shrink or grow it, through Windows"),
+        ]
+      : [];
   return (
     <div className="edit-actions">
       {(partitionActions.some(Boolean) || freeActions.some(Boolean)) && (
         <div className="button-row">{[...partitionActions, ...freeActions]}</div>
       )}
       {volumeActions.some(Boolean) && <div className="button-row">{volumeActions}</div>}
+      {placeActions.some(Boolean) && <div className="button-row">{placeActions}</div>}
       <div className="button-row">
         {diskActions}
         {undoable && button("Undo a change…", () => onForm({ kind: "undo" }), "Put back the table as it was before a change")}

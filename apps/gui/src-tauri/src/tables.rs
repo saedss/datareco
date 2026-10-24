@@ -14,6 +14,7 @@ use datareco_partitions::edit::{
     list_backups, plan, preview, read_backup, type_choices, undo_writes, verify_writes,
 };
 use datareco_partitions::{DiskMap, disk_map};
+use datareco_relocate::{default_journal_dir, unfinished};
 use serde::Serialize;
 use tauri::State;
 
@@ -21,6 +22,7 @@ use crate::copies::Copies;
 use crate::files::{FileSystems, Recoveries};
 use crate::health::DiskTests;
 use crate::partitions::Searches;
+use crate::relocations::Moves;
 use crate::volumes::Wipes;
 use crate::{CommandError, OpenSources};
 
@@ -49,6 +51,7 @@ pub struct Busy<'a> {
     pub copies: State<'a, Copies>,
     pub tests: State<'a, DiskTests>,
     pub wipes: State<'a, Wipes>,
+    pub moves: State<'a, Moves>,
 }
 
 /// The source opened anew (and its cache entry dropped), so what's read
@@ -124,6 +127,7 @@ pub fn apply_table(
     copies: State<'_, Copies>,
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
+    moves: State<'_, Moves>,
     id: String,
     ops: Vec<Operation>,
     confirmation: String,
@@ -135,6 +139,7 @@ pub fn apply_table(
         copies,
         tests,
         wipes,
+        moves,
     };
     check_not_busy(&spec, &busy)?;
     // Planned again on a freshly opened disk: what's written must be what
@@ -156,6 +161,7 @@ pub fn apply_table(
         changes: &changes,
         writes: &plan.writes,
         undoes: None,
+        undoable: true,
     };
     let backup = write(&spec, &disk, &change, &confirmation);
     sources.clear();
@@ -213,6 +219,7 @@ pub fn undo_table(
     copies: State<'_, Copies>,
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
+    moves: State<'_, Moves>,
     id: String,
     backup: String,
     confirmation: String,
@@ -224,6 +231,7 @@ pub fn undo_table(
         copies,
         tests,
         wipes,
+        moves,
     };
     check_not_busy(&spec, &busy)?;
     let disk = Disk::open(&spec)?;
@@ -236,6 +244,7 @@ pub fn undo_table(
         changes: &changes,
         writes: &writes,
         undoes: Some(&path),
+        undoable: true,
     };
     let result = write(&spec, &disk, &change, &confirmation);
     sources.clear();
@@ -243,9 +252,37 @@ pub fn undo_table(
     Ok(Applied { backup: result? })
 }
 
-/// Refuses while something else uses the disk: a copy to or from it, a
-/// recovery, a lost-partition search, a surface or speed test, a wipe.
+/// Refuses while something else uses the disk (a copy to or from it, a
+/// recovery, a lost-partition search, a surface or speed test, a wipe, a
+/// move), or while a move on it is left unfinished: changing the disk
+/// before carrying it on could stop it carrying on.
 pub(crate) fn check_not_busy(spec: &SourceSpec, busy: &Busy<'_>) -> Result<(), CommandError> {
+    check_nothing_running(spec, busy)?;
+    let devices = list_devices().unwrap_or_default();
+    let mut ids = vec![spec.id()];
+    ids.extend(
+        devices
+            .disks_of_source(spec)
+            .into_iter()
+            .map(|d| SourceSpec::PhysicalDisk(d).id()),
+    );
+    let journals = default_journal_dir();
+    if let Some(journal) = ids.iter().find_map(|id| unfinished(&journals, id)) {
+        return Err(refused(format!(
+            "A partition move on {} didn't finish (its journal is {}). Carry it on first from the \
+             Disk view, then try again.",
+            spec.display_name(),
+            journal.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Refuses while something else is running on the disk.
+pub(crate) fn check_nothing_running(
+    spec: &SourceSpec,
+    busy: &Busy<'_>,
+) -> Result<(), CommandError> {
     let devices = list_devices().unwrap_or_default();
     let disks = devices.disks_of_source(spec);
     let uses = |ids: Vec<String>| {
@@ -268,6 +305,8 @@ pub(crate) fn check_not_busy(spec: &SourceSpec, busy: &Busy<'_>) -> Result<(), C
         Some("A surface or speed test")
     } else if uses(busy.wipes.sources_in_use()) {
         Some("Wiping")
+    } else if uses(busy.moves.sources_in_use()) {
+        Some("Moving a partition")
     } else {
         None
     };

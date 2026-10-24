@@ -9,6 +9,7 @@ import {
   SpeedStatus,
   SurfaceProgress,
   TableView,
+  UnfinishedMove,
   api,
   driveLetter,
   toCommandError,
@@ -16,6 +17,7 @@ import {
 import { formatNumber, formatSize } from "../format";
 import { ApplyBox, CreateForm, EditActions, EditForm, FieldForm, PendingChanges, UndoBox } from "./TableEditing";
 import { FormatForm, LabelForm, LetterForm, WipeForm, rangeOf, typeNote } from "./VolumeForms";
+import { MoveForm, ResizeForm } from "./MoveForms";
 
 type Props = {
   sourceId: string;
@@ -43,6 +45,7 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
   const [writeError, setWriteError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const [unfinishedMove, setUnfinishedMove] = useState<UnfinishedMove | null>(null);
   const latest = useRef(0);
   const isImage = sourceId.startsWith("image:");
 
@@ -58,6 +61,14 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
   useEffect(() => {
     loadMap();
   }, [loadMap, version]);
+
+  // A move of this disk that didn't finish (stopped, or a power cut).
+  useEffect(() => {
+    api
+      .unfinishedMove(sourceId)
+      .then(setUnfinishedMove)
+      .catch(() => setUnfinishedMove(null));
+  }, [sourceId, version]);
 
   const map: DiskMap | null = view?.map ?? null;
   const keyOf = (s: Segment) => `${s.kind}:${s.startLba}`;
@@ -98,6 +109,12 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
     setVersion((v) => v + 1);
   }
 
+  /** A move form closed: a stopped move leaves a journal to carry on from. */
+  function closeMove() {
+    setForm(null);
+    setVersion((v) => v + 1);
+  }
+
   /** "partition 2 (E: Photos)", or the whole source. */
   function describe(s: Segment | null): string {
     if (!s || s.kind === "wholeDisk") return `all of ${sourceName}`;
@@ -134,6 +151,20 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
           </div>
         )}
         {!map && !mapError && <p className="muted small">Reading the partition table…</p>}
+        {unfinishedMove?.progress && form?.kind !== "resumeMove" && (
+          <div className="banner warning" role="alert">
+            A partition move on this disk didn't finish ({formatSize(unfinishedMove.progress.done)} of{" "}
+            {formatSize(unfinishedMove.progress.total)} copied). Its journal keeps it safe; carry it on before changing
+            anything else.{" "}
+            <button onClick={() => setForm({ kind: "resumeMove" })}>Carry on…</button>
+          </div>
+        )}
+        {unfinishedMove && !unfinishedMove.progress && (
+          <div className="banner error" role="alert">
+            A partition move on this disk didn't finish, and can't carry on: {unfinishedMove.problem} DataReco won't
+            change this disk while that journal is there.
+          </div>
+        )}
         {map && view && (
           <>
             <p className="muted small">{tableSummary(map.table)}</p>
@@ -164,8 +195,17 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
                 view={view}
                 segment={segment}
                 sectorSize={sectorSize}
-                disabled={!canEdit || form?.kind === "apply" || form?.kind === "undo" || form?.kind === "wipe"}
+                disabled={
+                  !canEdit ||
+                  unfinishedMove != null ||
+                  form?.kind === "apply" ||
+                  form?.kind === "undo" ||
+                  form?.kind === "wipe" ||
+                  form?.kind === "move" ||
+                  form?.kind === "resumeMove"
+                }
                 pending={ops.length}
+                isDisk={sourceId.startsWith("disk:")}
                 onOp={addOp}
                 onForm={(f) => {
                   setWriteError(null);
@@ -232,6 +272,40 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
                 sourceId={sourceId}
                 what={describe(form.segment)}
                 range={rangeOf(form.segment)}
+                onDone={done}
+                onClose={() => setForm(null)}
+              />
+            )}
+            {form?.kind === "move" && (
+              <MoveForm
+                key={`move-${form.segment.startLba}-${form.align ? "align" : ""}`}
+                sourceId={sourceId}
+                sectorSize={sectorSize}
+                what={describe(form.segment)}
+                segment={form.segment}
+                segments={map.segments}
+                align={form.align}
+                onDone={done}
+                onClose={closeMove}
+              />
+            )}
+            {form?.kind === "resumeMove" && (
+              <MoveForm
+                sourceId={sourceId}
+                sectorSize={sectorSize}
+                what="the partition"
+                segment={null}
+                segments={map.segments}
+                unfinished={unfinishedMove?.progress ?? null}
+                onDone={done}
+                onClose={closeMove}
+              />
+            )}
+            {form?.kind === "resize" && (
+              <ResizeForm
+                sourceId={sourceId}
+                segment={form.segment}
+                what={describe(form.segment)}
                 onDone={done}
                 onClose={() => setForm(null)}
               />

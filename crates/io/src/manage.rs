@@ -39,6 +39,22 @@ pub fn format_with_windows(
     )
 }
 
+/// How small and how big Windows can make the partition starting `offset`
+/// bytes into disk `number`: (smallest, biggest) in bytes. Only NTFS and
+/// ReFS volumes can be resized; growing needs free space right after the
+/// partition. Can take a while: Windows looks at where files sit.
+pub fn partition_size_limits(number: u32, offset: u64) -> Result<(u64, u64)> {
+    crate::platform::partition_size_limits(number, offset)
+}
+
+/// Shrinks or grows the partition starting `offset` bytes into disk
+/// `number` to `size` bytes, with its file system, through Windows (which
+/// moves files out of the way when shrinking). Works while the volume is in
+/// use, the one Windows runs from included.
+pub fn resize_with_windows(number: u32, offset: u64, size: u64) -> Result<()> {
+    crate::platform::resize_with_windows(number, offset, size)
+}
+
 /// Sets (or, with `None` or an empty label, removes) a mounted volume's
 /// label.
 pub fn set_volume_label(path: &str, label: Option<&str>) -> Result<()> {

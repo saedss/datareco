@@ -14,14 +14,17 @@ and more.
 > It maps each disk, checks drive health (S.M.A.R.T., surface test, read
 > speed), changes partition tables (create, delete, hide, convert MBR↔GPT, put
 > lost partitions back, undo), formats partitions (FAT32 of any size, exFAT,
-> NTFS), wipes them, and changes labels and drive letters. Resizing, moving and
-> cloning partitions come next; see the [roadmap](docs/ROADMAP.md).
+> NTFS), wipes them, changes labels and drive letters, moves partitions (with a
+> journal that carries on after a power cut) and resizes NTFS ones through
+> Windows. Cloning partitions and moving Windows to another disk come next; see
+> the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
 DataReco only reads the disks you look at, until you ask it to write: copying
-into a new image file or onto another disk, changing a partition table, or
-formatting or wiping. Writing to a disk always needs you to type its name first.
+into a new image file or onto another disk, changing a partition table,
+formatting, wiping, moving or resizing. Writing to a disk always needs you to
+type its name first.
 Windows lets programs read disks and volumes directly only when they run as
 administrator; image files work without. The desktop app offers **Restart as
 administrator** when it needs to.
@@ -70,6 +73,17 @@ administrator** when it needs to.
     letter** do what they say. Formatting or wiping a partition closes only
     its own volume, so partitions on the disk Windows runs from can be
     formatted too (not Windows' own, and the whole disk can't be wiped).
+  - **Move** a partition into free space next to it, or by a number of MiB:
+    DataReco copies it block by block, updates its boot sector, then writes
+    the new partition table. A journal (in `%LOCALAPPDATA%\DataReco\moves`)
+    records each step, so a move that was stopped, or cut off by a power cut,
+    carries on where it left off (**Carry on…** on the Disk view); until then
+    nothing else changes that disk. **Align to 1 MiB** moves a partition that
+    doesn't start on a 1 MiB boundary onto one, which SSDs and drives with
+    4 KiB sectors work best with. **Resize** shrinks or grows an NTFS
+    partition through Windows (which moves files out of the way when
+    shrinking), C: included while Windows runs from it; growing needs free
+    space right after the partition.
 - **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and
   btrfs volumes on the disk: folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
@@ -133,6 +147,11 @@ datareco format disk1 -p 2 --fs fat32 --apply disk1    # FAT32, any size up to 2
 datareco format disk1 -p 3 --fs ntfs --label Data --apply disk1   # through Windows
 datareco wipe disk1 -p 2 --apply disk1                 # zeros over partition 2
 datareco wipe disk2 --random --apply disk2             # the whole disk, random bytes
+datareco move disk1 -p 2 --by -500MiB                  # shows the move; nothing written
+datareco move disk1 -p 2 --to-sector 2048 --apply disk1   # copies it there, with a journal
+datareco move disk1 --resume --apply disk1             # carry on a move that was cut off
+datareco align disk1 -p 1 --apply disk1                # onto the nearest 1 MiB boundary
+datareco resize disk1 -p 2 --size 50GiB --apply disk1  # NTFS, through Windows (or min, max)
 datareco label E: "Holiday 2026"                       # or without a label to remove it
 datareco letter E: F                                   # or "none" to take the letter away
 datareco find backup.img --text "IMPORTANT" --ignore-case
@@ -195,6 +214,14 @@ or an image file path.
   it's overwritten (a scan may find them); a wipe overwrites everything in its
   range. Neither touches the volume Windows runs from, and the whole disk
   Windows runs from can't be wiped.
+- **Moves keep a journal on another disk.** Moving a partition overwrites where
+  it was, so DataReco writes down each step before taking it (and, when the
+  partition moves less than a block, saves that block first). After a power cut
+  or Ctrl+C the move carries on from the journal, and DataReco won't change the
+  disk in any other way until it has. It checks the partition table is still
+  the one the move started from, and refuses if it isn't. A move can't be
+  undone from the table backup: to put a partition back, move it back. Moving
+  refuses the disk Windows runs from.
 - **Health checks only read.** Windows passes S.M.A.R.T. commands to SATA drives
   only through a handle opened for writing, so the health check opens one; it
   sends three read-only commands through it (read the attributes, read their

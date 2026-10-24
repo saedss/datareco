@@ -31,11 +31,11 @@ use crate::crc32::crc32;
 use crate::table::{TableKind, read, read_header, read_table};
 
 pub use backup::{
-    BackupInfo, Change, SectorWrite, TableBackup, apply_writes, default_backup_dir, list_backups,
-    next_to_undo, read_backup, undo_writes, verify_writes,
+    BackupInfo, Change, DiskFacts, SectorWrite, TableBackup, apply_known_writes, apply_writes,
+    default_backup_dir, list_backups, next_to_undo, read_backup, undo_writes, verify_writes,
 };
 pub use ops::{Operation, Step};
-pub use plan::{Plan, StepError, plan, preview};
+pub use plan::{Plan, StepError, plan, plan_move, preview};
 pub use types::{TypeChoice, type_choices, type_for_file_system};
 
 /// A partition table style.

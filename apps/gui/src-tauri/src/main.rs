@@ -8,6 +8,7 @@ mod files;
 mod health;
 mod partitions;
 mod raw;
+mod relocations;
 mod scans;
 mod structures;
 mod tables;
@@ -224,6 +225,7 @@ fn main() {
         .manage(copies::Copies::default())
         .manage(health::DiskTests::default())
         .manage(volumes::Wipes::default())
+        .manage(relocations::Moves::default())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             app.manage(Templates::load(config.join("templates")));
@@ -291,6 +293,14 @@ fn main() {
             volumes::stop_wipe,
             volumes::set_label,
             volumes::set_letter,
+            relocations::preview_move,
+            relocations::align_partition_target,
+            relocations::unfinished_move,
+            relocations::start_move,
+            relocations::continue_move,
+            relocations::stop_move,
+            relocations::resize_limits,
+            relocations::resize_partition,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

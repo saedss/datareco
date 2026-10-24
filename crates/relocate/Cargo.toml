@@ -1,0 +1,21 @@
+[package]
+name = "datareco-relocate"
+description = "Moving partitions for DataReco: block by block, with a journal to carry on after a power cut"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+datareco-io.workspace = true
+datareco-partitions.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+datareco-format.workspace = true
+datareco-fs.workspace = true
+
+[lints]
+workspace = true
