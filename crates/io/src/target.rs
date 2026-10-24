@@ -330,11 +330,12 @@ fn disk_check(
     }
 }
 
-/// Checks that disk `number`'s partition table may be changed: it must
-/// exist and not be the disk Windows runs from (whose volumes can't be
-/// closed while it runs). Its volumes are closed while the table is
-/// written ([`DiskTarget::open`]), and Windows reads the new table after.
-pub fn check_disk_for_table_changes(number: u32, devices: &DeviceList) -> Result<DiskTargetCheck> {
+/// Checks that disk `number` may be changed (its partition table written,
+/// or the whole disk wiped): it must exist and not be the disk Windows runs
+/// from (whose volumes can't be closed while it runs). Its volumes are
+/// closed while it's written ([`DiskTarget::open`]), and Windows reads its
+/// partition table again after.
+pub fn check_disk_for_changes(number: u32, devices: &DeviceList) -> Result<DiskTargetCheck> {
     let name = SourceSpec::PhysicalDisk(number).display_name();
     let disk = devices
         .disks
@@ -344,11 +345,141 @@ pub fn check_disk_for_table_changes(number: u32, devices: &DeviceList) -> Result
     if devices.system_disks().contains(&number) {
         let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
         return Err(Error::refused(format!(
-            "{name} holds Windows ({drive}). DataReco doesn't change the partition table of the \
-             disk this computer runs from."
+            "{name} holds Windows ({drive}). DataReco doesn't change the partition table of, or \
+             wipe, the disk this computer runs from."
         )));
     }
     Ok(disk_check(number, name, disk, devices, Vec::new()))
+}
+
+/// A volume that passed the checks for being formatted or wiped.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeTargetCheck {
+    /// The volume path (`\\?\Volume{…}`).
+    pub path: String,
+    /// "E: (Photos)", or its size when it has no letter.
+    pub name: String,
+    /// The disk it's on.
+    pub disk: u32,
+    /// Where it starts on that disk, in bytes, and its size.
+    pub offset: u64,
+    pub size: u64,
+    /// What the person types to confirm: the disk's name, `disk2`.
+    pub confirmation: String,
+}
+
+/// Checks that the volume at `path` may be formatted or wiped: it must be
+/// on one disk, and not the volume Windows runs from. Only this volume is
+/// closed while it's written, so it may share a disk with Windows.
+pub fn check_volume_for_changes(path: &str, devices: &DeviceList) -> Result<VolumeTargetCheck> {
+    let volume = devices.volume(path).ok_or_else(|| Error::NotFound {
+        name: SourceSpec::Volume(path.to_owned()).display_name(),
+    })?;
+    let place = volume.mount_points.first().map_or_else(
+        || {
+            format!(
+                "A {} volume",
+                volume.size.map_or_else(String::new, human_size)
+            )
+        },
+        |m| m.trim_end_matches('\\').to_owned(),
+    );
+    let name = match &volume.label {
+        Some(label) => format!("{place} ({label})"),
+        None => place,
+    };
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    if volume
+        .mount_points
+        .iter()
+        .any(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(&drive))
+    {
+        return Err(Error::refused(format!(
+            "{name} is the volume Windows runs from. DataReco won't format or wipe it."
+        )));
+    }
+    let [extent] = &volume.extents[..] else {
+        return Err(Error::refused(format!(
+            "{name} isn't one stretch of one disk (a dynamic or spanned volume), which DataReco \
+             doesn't change."
+        )));
+    };
+    Ok(VolumeTargetCheck {
+        path: volume.path.clone(),
+        name,
+        disk: extent.disk,
+        offset: extent.offset,
+        size: extent.length,
+        confirmation: format!("disk{}", extent.disk),
+    })
+}
+
+/// One volume open for writing, closed (locked and dismounted) to Windows
+/// and every program until it's dropped; then Windows mounts what's on it
+/// now. Offsets are from the volume's start.
+pub struct VolumeTarget {
+    file: File,
+    size: u64,
+    sector_size: u32,
+    buffer: AlignedBuf,
+}
+
+impl VolumeTarget {
+    /// Opens a checked volume once the person typed its confirmation.
+    /// Refuses if a program has files open on it. Needs administrator rights.
+    pub fn open(check: &VolumeTargetCheck, typed: &str) -> Result<VolumeTarget> {
+        if !typed.trim().eq_ignore_ascii_case(&check.confirmation) {
+            return Err(Error::refused(format!(
+                "Type {} to confirm that everything on {} may be erased.",
+                check.confirmation, check.name
+            )));
+        }
+        let opened = crate::platform::open_volume_for_writing(&check.path)?;
+        if opened.size < check.size {
+            return Err(Error::refused(format!(
+                "{} changed since it was checked. Check it again.",
+                check.name
+            )));
+        }
+        Ok(VolumeTarget {
+            file: opened.file,
+            size: check.size,
+            sector_size: opened.sector_size,
+            buffer: AlignedBuf::zeroed(DISK_WRITE_CHUNK),
+        })
+    }
+}
+
+impl SectorTarget for VolumeTarget {
+    fn sector_size(&self) -> u32 {
+        self.sector_size
+    }
+
+    fn capacity(&self) -> Option<u64> {
+        Some(self.size)
+    }
+
+    fn write_at(&mut self, offset: u64, data: &[u8]) -> io::Result<()> {
+        write_aligned(
+            &mut self.file,
+            &mut self.buffer,
+            self.size,
+            self.sector_size,
+            offset,
+            data,
+        )
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.sync_all()
+    }
+}
+
+impl Drop for VolumeTarget {
+    fn drop(&mut self) {
+        let _ = self.file.sync_all();
+    }
 }
 
 /// Refuses a file (an image or map file) on the disk being copied from:
@@ -411,6 +542,13 @@ impl DiskTarget {
     }
 }
 
+/// A volume opened for writing, locked and dismounted.
+pub(crate) struct OpenedVolume {
+    pub(crate) file: File,
+    pub(crate) size: u64,
+    pub(crate) sector_size: u32,
+}
+
 /// A disk opened for writing, with its volumes locked.
 pub(crate) struct OpenedDisk {
     pub(crate) file: File,
@@ -429,32 +567,54 @@ impl SectorTarget for DiskTarget {
     }
 
     fn write_at(&mut self, offset: u64, data: &[u8]) -> io::Result<()> {
-        let sector = self.sector_size as usize;
-        if !offset.is_multiple_of(u64::from(self.sector_size)) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "write not on a sector boundary",
-            ));
-        }
-        let mut position = offset;
-        for chunk in data.chunks(DISK_WRITE_CHUNK) {
-            let padded = chunk.len().next_multiple_of(sector);
-            let end = position
-                .checked_add(padded as u64)
-                .filter(|&end| end <= self.size)
-                .ok_or_else(|| io::Error::other("write past the end of the disk"))?;
-            self.buffer[..chunk.len()].copy_from_slice(chunk);
-            self.buffer[chunk.len()..padded].fill(0);
-            self.file.seek(SeekFrom::Start(position))?;
-            self.file.write_all(&self.buffer[..padded])?;
-            position = end;
-        }
-        Ok(())
+        write_aligned(
+            &mut self.file,
+            &mut self.buffer,
+            self.size,
+            self.sector_size,
+            offset,
+            data,
+        )
     }
 
     fn flush(&mut self) -> io::Result<()> {
         self.file.sync_all()
     }
+}
+
+/// Writes `data` at `offset` of a device opened without buffering: through
+/// a sector-aligned buffer, a chunk at a time, padding a partial last
+/// sector with zeros. Refuses offsets off a sector boundary and writes past
+/// `size`.
+fn write_aligned(
+    file: &mut File,
+    buffer: &mut AlignedBuf,
+    size: u64,
+    sector_size: u32,
+    offset: u64,
+    data: &[u8],
+) -> io::Result<()> {
+    let sector = sector_size as usize;
+    if !offset.is_multiple_of(u64::from(sector_size)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "write not on a sector boundary",
+        ));
+    }
+    let mut position = offset;
+    for chunk in data.chunks(DISK_WRITE_CHUNK) {
+        let padded = chunk.len().next_multiple_of(sector);
+        let end = position
+            .checked_add(padded as u64)
+            .filter(|&end| end <= size)
+            .ok_or_else(|| io::Error::other("write past the end of the disk"))?;
+        buffer[..chunk.len()].copy_from_slice(chunk);
+        buffer[chunk.len()..padded].fill(0);
+        file.seek(SeekFrom::Start(position))?;
+        file.write_all(&buffer[..padded])?;
+        position = end;
+    }
+    Ok(())
 }
 
 impl Drop for DiskTarget {
@@ -583,16 +743,37 @@ mod tests {
         let devices = computer();
         let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
         if system.eq_ignore_ascii_case("C:") {
-            let reason = refusal(check_disk_for_table_changes(0, &devices));
+            let reason = refusal(check_disk_for_changes(0, &devices));
             assert!(reason.contains("holds Windows"), "{reason}");
         }
-        let check = check_disk_for_table_changes(1, &devices).unwrap();
+        let check = check_disk_for_changes(1, &devices).unwrap();
         assert_eq!(check.confirmation, "disk1");
         assert_eq!(check.volumes, ["D:", "A 1.0 GiB volume"]);
         assert!(matches!(
-            check_disk_for_table_changes(9, &devices),
+            check_disk_for_changes(9, &devices),
             Err(Error::NotFound { .. })
         ));
+    }
+
+    #[test]
+    fn volumes_but_not_windows_own_may_be_formatted() {
+        let mut devices = computer();
+        let check = check_volume_for_changes("D:", &devices).unwrap();
+        assert_eq!((check.disk, check.confirmation.as_str()), (1, "disk1"));
+        assert_eq!(check.name, "D:");
+        let reason = |result: Result<VolumeTargetCheck>| match result {
+            Err(Error::Refused { reason }) => reason,
+            other => panic!("expected a refusal, got {other:?}"),
+        };
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        if system.eq_ignore_ascii_case("C:") {
+            let refused = reason(check_volume_for_changes("C:", &devices));
+            assert!(refused.contains("Windows runs from"), "{refused}");
+        }
+        let second = devices.volumes[1].extents[0].clone();
+        devices.volumes[1].extents.push(second);
+        let refused = reason(check_volume_for_changes("D:", &devices));
+        assert!(refused.contains("spanned"), "{refused}");
     }
 
     #[test]

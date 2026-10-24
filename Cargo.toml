@@ -4,6 +4,7 @@ members = ["crates/*", "apps/cli", "apps/gui/src-tauri"]
 # Plain `cargo build` / `cargo test` skip the desktop app, because it needs the
 # frontend built first (`npm run build` in apps/gui). Build it with `-p datareco-gui`.
 default-members = [
+    "crates/format",
     "crates/fs",
     "crates/health",
     "crates/imaging",
@@ -48,6 +49,7 @@ windows-sys = { version = "0.61", features = [
 datareco-io = { path = "crates/io" }
 datareco-templates = { path = "crates/templates" }
 datareco-partitions = { path = "crates/partitions" }
+datareco-format = { path = "crates/format" }
 datareco-fs = { path = "crates/fs" }
 datareco-health = { path = "crates/health" }
 datareco-scan = { path = "crates/scan" }

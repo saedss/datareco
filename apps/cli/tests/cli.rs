@@ -1101,3 +1101,59 @@ fn table_changes_are_shown_first_written_with_apply_and_undone() {
     std::fs::remove_file(image).unwrap();
     std::fs::remove_dir_all(backups).unwrap();
 }
+
+#[test]
+fn format_and_wipe_show_first_and_write_with_apply() {
+    let image = disk_with_free_space("format.img");
+    let img = image.to_str().unwrap();
+    let name = image.file_name().unwrap().to_str().unwrap();
+
+    let out = datareco(&["format", img, "-p", "1", "--fs", "exfat", "--label", "Trip"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Nothing was written"),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = datareco(&[
+        "format", img, "-p", "1", "--fs", "exfat", "--label", "Trip", "--apply", name,
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Formatted: exFAT \"Trip\""),
+        "{}",
+        stdout(&out)
+    );
+    let listing = stdout(&datareco(&["ls", img, "-p", "1"]));
+    assert!(listing.starts_with("exFAT \"Trip\""), "{listing}");
+
+    let out = datareco(&["format", img, "-p", "1", "--fs", "fat32", "--apply", name]);
+    assert!(
+        stderr(&out).contains("too small for FAT32"),
+        "{}",
+        stderr(&out)
+    );
+    let out = datareco(&["format", img, "--fs", "exfat"]);
+    assert!(
+        stderr(&out).contains("pick a partition"),
+        "{}",
+        stderr(&out)
+    );
+    let out = datareco(&["format", img, "-p", "1", "--fs", "ntfs", "--apply", name]);
+    assert!(stderr(&out).contains("only on disks"), "{}", stderr(&out));
+
+    let out = datareco(&["wipe", img, "-p", "1", "--apply", name]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let bytes = std::fs::read(&image).unwrap();
+    assert!(
+        bytes[1 << 20..9 << 20].iter().all(|&b| b == 0),
+        "partition 1 is zeros"
+    );
+    assert_eq!(
+        &bytes[510..512],
+        [0x55, 0xAA],
+        "the partition table is still there"
+    );
+    std::fs::remove_file(image).unwrap();
+}

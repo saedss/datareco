@@ -1,0 +1,19 @@
+[package]
+name = "datareco-format"
+description = "Formatting (FAT32, exFAT) and wiping for DataReco"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+datareco-io.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+datareco-fs.workspace = true
+datareco-partitions.workspace = true
+
+[lints]
+workspace = true

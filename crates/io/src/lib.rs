@@ -3,8 +3,11 @@
 //!
 //! Reading never writes: opening a disk, volume or image to read it never
 //! asks the OS for write access. Writing happens only through [`target`]:
-//! new image files, image files a copy carries on into, and whole disks that
-//! passed [`check_disk_target`] and were confirmed by typing their name.
+//! new image files, image files a copy carries on into, whole disks that
+//! passed [`check_disk_target`] or [`check_disk_for_changes`], and single
+//! volumes that passed [`check_volume_for_changes`], each confirmed by
+//! typing the disk's name; and through [`manage`], which asks Windows to
+//! format a volume or change its label or drive letter.
 //! The one exception is [`read_health_data`]: Windows only passes ATA
 //! S.M.A.R.T. commands on through a handle opened for writing, so it opens
 //! one, and sends only the read-only commands listed in its module.
@@ -22,6 +25,7 @@ mod devices;
 mod disk;
 mod error;
 mod health;
+pub mod manage;
 mod search;
 mod source;
 mod spec;
@@ -49,6 +53,7 @@ pub use search::SearchProgress;
 pub use source::{FileSource, MemorySource, SectorSource, is_device_gone};
 pub use spec::SourceSpec;
 pub use target::{
-    CopySource, DiskTarget, DiskTargetCheck, ImageTarget, MemoryTarget, SectorTarget,
-    check_disk_for_table_changes, check_disk_target, check_outside_source,
+    CopySource, DiskTarget, DiskTargetCheck, ImageTarget, MemoryTarget, SectorTarget, VolumeTarget,
+    VolumeTargetCheck, check_disk_for_changes, check_disk_target, check_outside_source,
+    check_volume_for_changes,
 };

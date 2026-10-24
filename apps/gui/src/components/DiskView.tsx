@@ -15,6 +15,7 @@ import {
 } from "../api";
 import { formatNumber, formatSize } from "../format";
 import { ApplyBox, CreateForm, EditActions, EditForm, FieldForm, PendingChanges, UndoBox } from "./TableEditing";
+import { FormatForm, LabelForm, LetterForm, WipeForm, rangeOf, typeNote } from "./VolumeForms";
 
 type Props = {
   sourceId: string;
@@ -89,6 +90,21 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
     }
   }
 
+  /** A format, wipe, label or letter change finished. */
+  function done(message: string) {
+    setForm(null);
+    setNotice(message);
+    onTableChanged();
+    setVersion((v) => v + 1);
+  }
+
+  /** "partition 2 (E: Photos)", or the whole source. */
+  function describe(s: Segment | null): string {
+    if (!s || s.kind === "wholeDisk") return `all of ${sourceName}`;
+    const name = map ? segmentName(s, map.table) : "";
+    return s.partition != null ? `partition ${s.partition} (${name})` : name;
+  }
+
   async function undo(backup: string, confirmation: string) {
     setWriting(true);
     setWriteError(null);
@@ -135,13 +151,21 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
             ))}
             {notice && <p className="notice-line small">{notice}</p>}
             {view.notEditable || view.plan.blocked ? (
-              <p className="muted small">Partition table changes: {view.notEditable ?? view.plan.blocked}</p>
+              <>
+                <p className="muted small">Partition table changes: {view.notEditable ?? view.plan.blocked}</p>
+                {!view.notEditable && (
+                  <div className="button-row">
+                    <button onClick={() => setForm({ kind: "wipe", segment: null })}>Wipe the whole disk…</button>
+                  </div>
+                )}
+              </>
             ) : (
               <EditActions
                 view={view}
                 segment={segment}
                 sectorSize={sectorSize}
-                disabled={!canEdit || form?.kind === "apply" || form?.kind === "undo"}
+                disabled={!canEdit || form?.kind === "apply" || form?.kind === "undo" || form?.kind === "wipe"}
+                pending={ops.length}
                 onOp={addOp}
                 onForm={(f) => {
                   setWriteError(null);
@@ -186,6 +210,37 @@ export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTable
                 onApply={apply}
                 onCancel={() => setForm(null)}
               />
+            )}
+            {form?.kind === "format" && (
+              <FormatForm
+                key={`format-${form.segment.startLba}`}
+                sourceId={sourceId}
+                what={describe(form.segment)}
+                range={rangeOf(form.segment)}
+                note={
+                  sourceId.startsWith("image:")
+                    ? null
+                    : typeNote(map.table.partitions.find((p) => p.number === form.segment.partition))
+                }
+                onDone={done}
+                onClose={() => setForm(null)}
+              />
+            )}
+            {form?.kind === "wipe" && (
+              <WipeForm
+                key={`wipe-${form.segment?.startLba ?? "disk"}`}
+                sourceId={sourceId}
+                what={describe(form.segment)}
+                range={rangeOf(form.segment)}
+                onDone={done}
+                onClose={() => setForm(null)}
+              />
+            )}
+            {form?.kind === "label" && (
+              <LabelForm sourceId={sourceId} segment={form.segment} onDone={done} onClose={() => setForm(null)} />
+            )}
+            {form?.kind === "letter" && (
+              <LetterForm sourceId={sourceId} segment={form.segment} onDone={done} onClose={() => setForm(null)} />
             )}
             {form?.kind === "undo" && (
               <UndoBox

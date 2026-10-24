@@ -11,6 +11,7 @@ mod raw;
 mod scans;
 mod structures;
 mod tables;
+mod volumes;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -222,6 +223,7 @@ fn main() {
         .manage(scans::Scans::default())
         .manage(copies::Copies::default())
         .manage(health::DiskTests::default())
+        .manage(volumes::Wipes::default())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             app.manage(Templates::load(config.join("templates")));
@@ -281,6 +283,14 @@ fn main() {
             tables::apply_table,
             tables::preview_undo,
             tables::undo_table,
+            volumes::preview_format,
+            volumes::format_partition,
+            volumes::preview_wipe,
+            volumes::start_wipe,
+            volumes::continue_wipe,
+            volumes::stop_wipe,
+            volumes::set_label,
+            volumes::set_letter,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

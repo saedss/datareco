@@ -109,7 +109,7 @@ function App() {
             <p>Pick a disk, volume or image file to look inside it.</p>
             <span
               className="badge"
-              title="DataReco writes to a disk only when you ask it to and type the disk's name: copying onto it, or applying partition table changes."
+              title="DataReco writes to a disk only when you ask it to and type the disk's name: copying onto it, applying partition table changes, formatting or wiping."
             >
               Read-only mode
             </span>

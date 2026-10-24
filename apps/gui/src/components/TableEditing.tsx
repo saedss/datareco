@@ -8,19 +8,26 @@ export type EditForm =
   | { kind: "type"; startLba: number; current: string }
   | { kind: "name"; startLba: number; current: string }
   | { kind: "apply" }
-  | { kind: "undo" };
+  | { kind: "undo" }
+  | { kind: "format"; segment: Segment }
+  /** `segment` null: the whole disk. */
+  | { kind: "wipe"; segment: Segment | null }
+  | { kind: "label"; segment: Segment }
+  | { kind: "letter"; segment: Segment };
 
 type ActionsProps = {
   view: TableView;
   segment: Segment | null;
   sectorSize: number;
   disabled: boolean;
+  /** Table changes waiting: formatting and wiping wait until they're written. */
+  pending: number;
   onOp: (op: Operation) => void;
   onForm: (form: EditForm) => void;
 };
 
 /** What can be done to the selected part of the disk, and to the whole disk. */
-export function EditActions({ view, segment, disabled, onOp, onForm }: ActionsProps) {
+export function EditActions({ view, segment, disabled, pending, onOp, onForm }: ActionsProps) {
   const table = view.map.table;
   const partition = segment?.partition != null ? table.partitions.find((p) => p.number === segment.partition) : null;
   const extended = table.partitions.find((p) => p.kind === "extended");
@@ -79,14 +86,27 @@ export function EditActions({ view, segment, disabled, onOp, onForm }: ActionsPr
           gpt && button("Convert to MBR", () => onOp({ op: "convert", style: "mbr" }), "Keeps every partition (four at most)"),
         ];
   const undoable = view.backups.some((b) => !b.undone && !b.undoes);
+  // Formatting, wiping, labels and letters act at once, on the disk as it
+  // is: not while table changes are waiting.
+  const volumeActions =
+    pending === 0 && segment && (segment.kind === "partition" || segment.kind === "wholeDisk")
+      ? [
+          button("Format…", () => onForm({ kind: "format", segment })),
+          button("Wipe…", () => onForm({ kind: "wipe", segment }), "Write over it so nothing can be recovered"),
+          segment.volume && button("Change label…", () => onForm({ kind: "label", segment })),
+          segment.volume && button("Change drive letter…", () => onForm({ kind: "letter", segment })),
+        ]
+      : [];
   return (
     <div className="edit-actions">
       {(partitionActions.some(Boolean) || freeActions.some(Boolean)) && (
         <div className="button-row">{[...partitionActions, ...freeActions]}</div>
       )}
+      {volumeActions.some(Boolean) && <div className="button-row">{volumeActions}</div>}
       <div className="button-row">
         {diskActions}
         {undoable && button("Undo a change…", () => onForm({ kind: "undo" }), "Put back the table as it was before a change")}
+        {pending === 0 && button("Wipe the whole disk…", () => onForm({ kind: "wipe", segment: null }))}
       </div>
     </div>
   );
