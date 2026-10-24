@@ -1,0 +1,18 @@
+[package]
+name = "datareco-health"
+description = "Drive health for DataReco: S.M.A.R.T., surface test, read speed test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+datareco-io.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

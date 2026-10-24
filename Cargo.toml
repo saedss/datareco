@@ -5,6 +5,7 @@ members = ["crates/*", "apps/cli", "apps/gui/src-tauri"]
 # frontend built first (`npm run build` in apps/gui). Build it with `-p datareco-gui`.
 default-members = [
     "crates/fs",
+    "crates/health",
     "crates/imaging",
     "crates/io",
     "crates/partitions",
@@ -36,6 +37,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_Storage_IscsiDisc",
+    "Win32_Storage_Nvme",
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_Threading",
@@ -46,6 +49,7 @@ datareco-io = { path = "crates/io" }
 datareco-templates = { path = "crates/templates" }
 datareco-partitions = { path = "crates/partitions" }
 datareco-fs = { path = "crates/fs" }
+datareco-health = { path = "crates/health" }
 datareco-scan = { path = "crates/scan" }
 datareco-imaging = { path = "crates/imaging" }
 sha2 = "0.10"

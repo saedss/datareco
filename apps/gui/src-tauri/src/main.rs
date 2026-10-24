@@ -5,6 +5,7 @@
 
 mod copies;
 mod files;
+mod health;
 mod partitions;
 mod raw;
 mod scans;
@@ -208,6 +209,7 @@ fn main() {
         .manage(files::Recoveries::default())
         .manage(scans::Scans::default())
         .manage(copies::Copies::default())
+        .manage(health::DiskTests::default())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             app.manage(Templates::load(config.join("templates")));
@@ -255,6 +257,14 @@ fn main() {
             copies::start_copy,
             copies::continue_copy,
             copies::stop_copy,
+            health::disk_map,
+            health::disk_health,
+            health::start_surface_test,
+            health::continue_surface_test,
+            health::stop_surface_test,
+            health::start_speed_test,
+            health::continue_speed_test,
+            health::stop_speed_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

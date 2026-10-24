@@ -2,6 +2,7 @@
 
 mod files;
 mod format;
+mod health;
 mod imaging;
 mod partitions;
 mod raw;
@@ -161,6 +162,35 @@ enum Command {
     /// Show the partition table, with file systems and problems.
     Partitions {
         /// A disk (disk0) or image file path.
+        source: String,
+    },
+    /// Map a disk: its partitions, free space, drive letters and free space on
+    /// each volume.
+    Map {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+    },
+    /// Check a drive's health from its S.M.A.R.T. data (SATA, NVMe, and
+    /// USB adapters that pass it on).
+    Health {
+        /// A disk (disk0), or a volume on it (C:).
+        source: String,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read every sector once and time it: finds slow and unreadable areas.
+    /// On a failing drive, copy it first (`image`): every read wears it.
+    Surface {
+        /// A disk (disk0), volume (C:) or image file path.
+        source: String,
+        /// Only test this partition, by its number in `datareco partitions`.
+        #[arg(long, short)]
+        partition: Option<u32>,
+    },
+    /// Measure how fast a disk reads (about 12 seconds; nothing is written).
+    Speed {
+        /// A disk (disk0) or volume (C:).
         source: String,
     },
     /// Search for lost partitions (after a wiped or damaged partition table).
@@ -348,6 +378,10 @@ fn main() -> ExitCode {
         } => structures::decode(&source, &template, sector, offset, templates_dir.as_deref()),
         Command::Partitions { source } => partitions::show(&source),
         Command::FindPartitions { source, full } => partitions::find(&source, full),
+        Command::Map { source } => health::map(&source),
+        Command::Health { source, json } => health::health(&source, json),
+        Command::Surface { source, partition } => health::surface(&source, partition),
+        Command::Speed { source } => health::speed(&source),
         Command::Ls {
             source,
             path,

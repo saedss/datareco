@@ -940,3 +940,81 @@ fn btrfs_volumes_list_their_subvolumes_and_files() {
     assert!(stdout(&out).contains("btrfs"), "{}", stdout(&out));
     std::fs::remove_file(image).unwrap();
 }
+
+/// A 64 MiB MBR disk: an 8 MiB primary partition, then an extended
+/// partition holding one 8 MiB logical partition and free space, then free
+/// space after it.
+fn disk_with_free_space(name: &str) -> PathBuf {
+    const MIB: u32 = 2048;
+    let mut bytes = vec![0u8; 64 << 20];
+    let entry = |table: &mut [u8], at: usize, kind: u8, start: u32, sectors: u32| {
+        table[at + 4] = kind;
+        table[at + 8..at + 12].copy_from_slice(&start.to_le_bytes());
+        table[at + 12..at + 16].copy_from_slice(&sectors.to_le_bytes());
+    };
+    entry(&mut bytes, 446, 0x07, MIB, 8 * MIB);
+    entry(&mut bytes, 462, 0x0F, 9 * MIB, 32 * MIB);
+    bytes[510..512].copy_from_slice(&[0x55, 0xAA]);
+    let ebr = 9 * MIB as usize * 512;
+    entry(&mut bytes[ebr..], 446, 0x83, MIB, 8 * MIB);
+    bytes[ebr + 510..ebr + 512].copy_from_slice(&[0x55, 0xAA]);
+    temp_image(name, &bytes)
+}
+
+#[test]
+fn map_shows_partitions_and_free_space() {
+    let image = disk_with_free_space("map.img");
+    let out = datareco(&["map", image.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("MBR, 64.0 MiB"), "{text}");
+    let rows: Vec<&str> = text.lines().filter(|l| l.contains("MiB  ")).collect();
+    assert_eq!(rows.len(), 4, "{text}");
+    assert!(
+        rows[0].trim_start().starts_with("1") && rows[0].contains("8.0 MiB"),
+        "{text}"
+    );
+    assert!(
+        rows[1].trim_start().starts_with("5") && rows[1].contains("Linux"),
+        "{text}"
+    );
+    assert!(
+        rows[2].contains("23.0 MiB") && rows[2].contains("in the extended partition"),
+        "{text}"
+    );
+    assert!(
+        rows[3].contains("23.0 MiB") && rows[3].contains("Free space"),
+        "{text}"
+    );
+    std::fs::remove_file(image).unwrap();
+}
+
+#[test]
+fn surface_tests_one_partition_and_health_needs_a_drive() {
+    let image = disk_with_free_space("surface.img");
+    let out = datareco(&["surface", image.to_str().unwrap(), "-p", "5"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("32 fast") || text.contains("32 normal"),
+        "{text}"
+    );
+    assert!(text.contains("0 unreadable"), "{text}");
+    assert!(!text.contains("couldn't be read"), "{text}");
+
+    let out = datareco(&["surface", image.to_str().unwrap(), "-p", "9"]);
+    assert!(
+        stderr(&out).contains("There's no partition 9"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = datareco(&["health", image.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("image files have none"),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::remove_file(image).unwrap();
+}

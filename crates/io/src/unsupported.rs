@@ -1,4 +1,4 @@
-//! Platforms without device support yet (Linux and macOS come in Phase 10).
+//! Platforms without device support yet (Linux and macOS come in Phase 11).
 //! Image files still work everywhere.
 
 use crate::devices::DeviceList;
@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io;
 
 use crate::error::{Error, Result};
+use crate::health::HealthData;
 use crate::source::FileSource;
 use crate::target::OpenedDisk;
 
@@ -22,6 +23,10 @@ pub(crate) fn open_disk_for_writing(_number: u32, _volumes: &[String]) -> Result
 }
 
 pub(crate) fn update_disk_properties(_file: &File) {}
+
+pub(crate) fn read_health_data(_number: u32) -> Result<HealthData> {
+    Err(unsupported("Reading drive health"))
+}
 
 /// Files on Linux and macOS are sparse without asking.
 pub(crate) fn make_sparse(_file: &File) -> io::Result<()> {

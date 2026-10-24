@@ -162,6 +162,36 @@ fn reads_an_mbr_with_logical_partitions() {
     );
 }
 
+#[test]
+fn maps_the_mbr_disk() {
+    use crate::SegmentKind::{Free, Partition};
+    let disk = mbr_disk().disk();
+    let spec = datareco_io::SourceSpec::Image("mbr.img".into());
+    let map = crate::disk_map(&disk, &spec, None).unwrap();
+    let shape: Vec<_> = map
+        .segments
+        .iter()
+        .map(|s| (s.kind, s.start_lba, s.sectors, s.partition, s.logical))
+        .collect();
+    // The 1 MiB between the two logical partitions holds the second
+    // extended boot record: too small for another partition.
+    assert_eq!(
+        shape,
+        [
+            (Partition, FAT_START, FAT_SECTORS, Some(1), false),
+            (Partition, NTFS_START, NTFS_SECTORS, Some(5), true),
+            (Partition, LINUX_START, LINUX_SECTORS, Some(6), true),
+            (
+                Free,
+                LINUX_START + LINUX_SECTORS,
+                MBR_DISK - LINUX_START - LINUX_SECTORS,
+                None,
+                true
+            ),
+        ]
+    );
+}
+
 fn assert_found_the_three_volumes(found: &[crate::FoundPartition]) {
     let summary: Vec<_> = found
         .iter()

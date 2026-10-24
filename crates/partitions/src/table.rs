@@ -91,7 +91,16 @@ pub struct PartitionTable {
     pub partitions: Vec<Partition>,
     /// With no partition table: the file system that fills the disk, if any.
     pub whole_disk: Option<FileSystem>,
+    /// GPT: the sectors the header lets partitions use.
+    pub usable: Option<UsableSectors>,
     pub problems: Vec<Problem>,
+}
+
+/// A range of sectors, first and last included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct UsableSectors {
+    pub first: u64,
+    pub last: u64,
 }
 
 /// Reads and checks the partition table. Never writes.
@@ -122,6 +131,7 @@ pub fn read_table(disk: &Disk) -> Result<PartitionTable> {
         disk_id: None,
         partitions: Vec::new(),
         whole_disk: None,
+        usable: None,
         problems: Vec::new(),
     };
     let mut usable = None;
@@ -175,6 +185,7 @@ pub fn read_table(disk: &Disk) -> Result<PartitionTable> {
     }
     let problems = check(&table, usable);
     table.problems.extend(problems);
+    table.usable = usable.map(|(first, last)| UsableSectors { first, last });
     Ok(table)
 }
 

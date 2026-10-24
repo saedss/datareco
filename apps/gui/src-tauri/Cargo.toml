@@ -12,6 +12,7 @@ tauri-build.workspace = true
 
 [dependencies]
 datareco-fs.workspace = true
+datareco-health.workspace = true
 datareco-imaging.workspace = true
 datareco-io.workspace = true
 datareco-partitions.workspace = true

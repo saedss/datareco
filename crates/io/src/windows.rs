@@ -26,14 +26,22 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
     GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, OPEN_EXISTING,
 };
+use windows_sys::Win32::Storage::IscsiDisc::{
+    IOCTL_SCSI_PASS_THROUGH, SCSI_IOCTL_DATA_IN, SCSI_PASS_THROUGH,
+};
+use windows_sys::Win32::Storage::Nvme::NVME_LOG_PAGE_HEALTH_INFO;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
     DISK_EXTENT, DISK_GEOMETRY, DISK_GEOMETRY_EX, FSCTL_ALLOW_EXTENDED_DASD_IO,
-    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_SET_SPARSE, GET_LENGTH_INFORMATION,
+    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_SET_SPARSE, GET_LENGTH_INFORMATION, IDEREGS,
     IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_LENGTH_INFO,
-    IOCTL_DISK_UPDATE_PROPERTIES, IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery,
-    STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_DEVICE_DESCRIPTOR, StorageAccessAlignmentProperty,
-    StorageDeviceProperty, VOLUME_DISK_EXTENTS,
+    IOCTL_DISK_UPDATE_PROPERTIES, IOCTL_STORAGE_PREDICT_FAILURE, IOCTL_STORAGE_QUERY_PROPERTY,
+    NVMeDataTypeLogPage, PropertyStandardQuery, ProtocolTypeNvme, SENDCMDINPARAMS,
+    SENDCMDOUTPARAMS, SMART_RCV_DRIVE_DATA, STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR,
+    STORAGE_DEVICE_DESCRIPTOR, STORAGE_PREDICT_FAILURE, STORAGE_PROTOCOL_DATA_DESCRIPTOR,
+    STORAGE_PROTOCOL_SPECIFIC_DATA, StorageAccessAlignmentProperty,
+    StorageAdapterProtocolSpecificProperty, StorageDeviceProperty,
+    StorageDeviceProtocolSpecificProperty, StorageDeviceSeekPenaltyProperty, VOLUME_DISK_EXTENTS,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -41,6 +49,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::devices::{DeviceList, DiskExtent, PhysicalDiskInfo, VolumeInfo};
 use crate::error::{Error, Result};
+use crate::health::{HEALTH_PAGE, HealthData, HealthPath};
 use crate::source::FileSource;
 use crate::spec::SourceSpec;
 use crate::target::OpenedDisk;
@@ -203,6 +212,11 @@ fn describe_disk(number: u32) -> Option<PhysicalDiskInfo> {
         .and_then(|reply| read_struct::<STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR>(&reply, 0))
         .map(|alignment| alignment.BytesPerPhysicalSector)
         .filter(|&bytes| bytes > 0);
+    // DEVICE_SEEK_PENALTY_DESCRIPTOR: Version, Size, then a one-byte
+    // IncursSeekPenalty, read as a byte (a Rust bool can't hold any value).
+    let solid_state = storage_query(&file, StorageDeviceSeekPenaltyProperty)
+        .ok()
+        .and_then(|reply| reply.get(8).map(|&penalty| penalty == 0));
     Some(PhysicalDiskInfo {
         number,
         path,
@@ -213,12 +227,15 @@ fn describe_disk(number: u32) -> Option<PhysicalDiskInfo> {
         size,
         sector_size: geometry.BytesPerSector,
         physical_sector_size,
+        firmware: descriptor.firmware,
+        solid_state,
     })
 }
 
 struct Descriptor {
     model: String,
     serial: Option<String>,
+    firmware: Option<String>,
     bus: String,
     removable: bool,
 }
@@ -227,6 +244,7 @@ fn device_descriptor(file: &File) -> Descriptor {
     let unknown = Descriptor {
         model: "Unknown disk".to_owned(),
         serial: None,
+        firmware: None,
         bus: "Unknown".to_owned(),
         removable: false,
     };
@@ -252,6 +270,7 @@ fn device_descriptor(file: &File) -> Descriptor {
             model
         },
         serial: text(descriptor.SerialNumberOffset),
+        firmware: text(descriptor.ProductRevisionOffset),
         bus: bus_name(descriptor.BusType).to_owned(),
         removable: descriptor.RemovableMedia,
     }
@@ -318,8 +337,9 @@ fn describe_volume(path: &str) -> Option<VolumeInfo> {
     let extents = open_device(device, false)
         .and_then(|file| disk_extents(&file))
         .unwrap_or_default();
+    let space = space(&root);
     let size = if extents.is_empty() {
-        total_size(&root)
+        space.map(|(total, _)| total)
     } else {
         Some(extents.iter().map(|extent| extent.length).sum())
     };
@@ -332,6 +352,7 @@ fn describe_volume(path: &str) -> Option<VolumeInfo> {
         label,
         file_system,
         size,
+        free: space.map(|(_, free)| free),
         extents,
     })
 }
@@ -384,13 +405,15 @@ fn volume_information(root: &[u16]) -> (Option<String>, Option<String>) {
     )
 }
 
-fn total_size(root: &[u16]) -> Option<u64> {
+/// A mounted volume's size and free space, in bytes, as its file system
+/// reports them.
+fn space(root: &[u16]) -> Option<(u64, u64)> {
     let mut total = 0u64;
-    // SAFETY: `root` is NUL-terminated; `total` is a valid output; the other
-    // outputs are null, which is allowed.
-    let ok =
-        unsafe { GetDiskFreeSpaceExW(root.as_ptr(), ptr::null_mut(), &mut total, ptr::null_mut()) };
-    (ok != 0).then_some(total)
+    let mut free = 0u64;
+    // SAFETY: `root` is NUL-terminated; `total` and `free` are valid outputs;
+    // the space free to this user isn't asked for (null), which is allowed.
+    let ok = unsafe { GetDiskFreeSpaceExW(root.as_ptr(), ptr::null_mut(), &mut total, &mut free) };
+    (ok != 0).then_some((total, free))
 }
 
 // ---------------------------------------------------------------- device queries
@@ -502,6 +525,353 @@ fn read_struct<T: Copy>(bytes: &[u8], offset: usize) -> Option<T> {
 
 fn short_reply() -> io::Error {
     io::Error::other("the device returned less data than expected")
+}
+
+/// Writes `bytes` into `buffer` at `offset`, for requests built by hand
+/// (so no struct padding bytes are ever sent).
+fn put(buffer: &mut [u8], offset: usize, bytes: &[u8]) {
+    buffer[offset..offset + bytes.len()].copy_from_slice(bytes);
+}
+
+// ---------------------------------------------------------------- drive health
+
+/// The only ATA commands DataReco sends. All of them read; keeping them in
+/// one closed list means nothing else can be sent by mistake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtaRead {
+    /// SMART READ DATA: the attribute page.
+    SmartData,
+    /// SMART READ ATTRIBUTE THRESHOLDS.
+    SmartThresholds,
+    /// IDENTIFY DEVICE.
+    Identify,
+}
+
+/// ATA command codes and the registers S.M.A.R.T. commands need (ACS-3).
+const ATA_SMART: u8 = 0xB0;
+const ATA_IDENTIFY_DEVICE: u8 = 0xEC;
+const SMART_READ_DATA: u8 = 0xD0;
+const SMART_READ_THRESHOLDS: u8 = 0xD1;
+const SMART_LBA_MID: u8 = 0x4F;
+const SMART_LBA_HIGH: u8 = 0xC2;
+/// The device register: LBA mode, device 0.
+const ATA_DEVICE: u8 = 0xA0;
+
+impl AtaRead {
+    /// (features, LBA mid, LBA high, command).
+    fn registers(self) -> (u8, u8, u8, u8) {
+        match self {
+            AtaRead::SmartData => (SMART_READ_DATA, SMART_LBA_MID, SMART_LBA_HIGH, ATA_SMART),
+            AtaRead::SmartThresholds => (
+                SMART_READ_THRESHOLDS,
+                SMART_LBA_MID,
+                SMART_LBA_HIGH,
+                ATA_SMART,
+            ),
+            AtaRead::Identify => (0, 0, 0, ATA_IDENTIFY_DEVICE),
+        }
+    }
+}
+
+pub(crate) fn read_health_data(number: u32) -> Result<HealthData> {
+    let name = SourceSpec::PhysicalDisk(number).display_name();
+    let path = disk_path(number);
+    let query = open_device(&path, false).map_err(|e| Error::from_io(&name, e))?;
+    let bus = device_descriptor(&query).bus;
+    if bus == "NVMe" {
+        let file = open_device(&path, true).map_err(|e| Error::from_io(&name, e))?;
+        return Ok(match nvme_health_log(&file) {
+            Ok(log) => HealthData::Nvme { log },
+            Err(e) => HealthData::Unavailable {
+                reason: format!("{name} didn't return its NVMe health log ({e})."),
+            },
+        });
+    }
+
+    // Windows passes ATA commands on only through a handle opened for
+    // writing. Only the read-only commands of `AtaRead` go through it.
+    let file = create_file(&path, GENERIC_READ | GENERIC_WRITE, 0)
+        .map_err(|e| Error::from_io(&name, e))?;
+    let prediction = predict_failure(&query).ok();
+    let failure_predicted = prediction.as_ref().map(|(predicted, _)| *predicted);
+
+    let driver = |command| ata_through_driver(&file, command);
+    if let Some(attributes) = driver(AtaRead::SmartData)
+        .ok()
+        .filter(|page| has_attributes(page))
+    {
+        return Ok(HealthData::Ata {
+            attributes,
+            thresholds: driver(AtaRead::SmartThresholds).ok(),
+            identify: driver(AtaRead::Identify).ok(),
+            failure_predicted,
+            via: HealthPath::Driver,
+        });
+    }
+    // USB adapters that follow SCSI/ATA Translation pass ATA commands on.
+    // Only tried over USB: elsewhere the driver path above is the one that works.
+    let adapter = |command| ata_through_usb_adapter(&file, command);
+    if bus == "USB"
+        && let Some(attributes) = adapter(AtaRead::SmartData)
+            .ok()
+            .filter(|page| has_attributes(page))
+    {
+        return Ok(HealthData::Ata {
+            attributes,
+            thresholds: adapter(AtaRead::SmartThresholds).ok(),
+            identify: adapter(AtaRead::Identify).ok(),
+            failure_predicted,
+            via: HealthPath::UsbAdapter,
+        });
+    }
+    if let Some((predicted, page)) = prediction
+        && (predicted || has_attributes(&page))
+    {
+        return Ok(HealthData::Ata {
+            attributes: page,
+            thresholds: None,
+            identify: None,
+            failure_predicted: Some(predicted),
+            via: HealthPath::FailurePrediction,
+        });
+    }
+
+    let identify = driver(AtaRead::Identify).ok();
+    let reason = if identify.as_deref().is_some_and(smart_turned_off) {
+        format!(
+            "S.M.A.R.T. is turned off on {name}. DataReco doesn't change drive settings; it \
+             can usually be turned on in the computer's firmware (BIOS or UEFI) setup."
+        )
+    } else if bus == "USB" {
+        format!(
+            "{name} is connected through a USB adapter that doesn't pass on the drive's health \
+             data. Connected directly (SATA or NVMe), it may."
+        )
+    } else {
+        format!(
+            "{name} didn't return any health data. Memory cards, USB sticks, RAID volumes and \
+             virtual disks usually have none."
+        )
+    };
+    Ok(HealthData::Unavailable { reason })
+}
+
+/// Whether an ATA S.M.A.R.T. attribute page lists any attribute: some
+/// adapters answer with an empty page instead of an error.
+fn has_attributes(page: &[u8]) -> bool {
+    page.len() == HEALTH_PAGE && (0..30).any(|i| page[2 + 12 * i] != 0)
+}
+
+/// Whether IDENTIFY DEVICE says S.M.A.R.T. is supported (word 82, bit 0)
+/// but turned off (word 85, bit 0).
+fn smart_turned_off(identify: &[u8]) -> bool {
+    let bit0 = |word: usize| identify.get(2 * word).is_some_and(|&low| low & 1 != 0);
+    identify.len() == HEALTH_PAGE && bit0(82) && !bit0(85)
+}
+
+/// SENDCMDINPARAMS (packed) for a read command returning one 512-byte page.
+fn smart_request(command: AtaRead) -> Vec<u8> {
+    let (features, mid, high, code) = command.registers();
+    let mut input = vec![0u8; size_of::<SENDCMDINPARAMS>()];
+    put(
+        &mut input,
+        offset_of!(SENDCMDINPARAMS, cBufferSize),
+        &len32(HEALTH_PAGE).to_le_bytes(),
+    );
+    let registers = offset_of!(SENDCMDINPARAMS, irDriveRegs);
+    let mut set = |field: usize, value: u8| input[registers + field] = value;
+    set(offset_of!(IDEREGS, bFeaturesReg), features);
+    set(offset_of!(IDEREGS, bSectorCountReg), 1);
+    set(offset_of!(IDEREGS, bSectorNumberReg), 1);
+    set(offset_of!(IDEREGS, bCylLowReg), mid);
+    set(offset_of!(IDEREGS, bCylHighReg), high);
+    set(offset_of!(IDEREGS, bDriveHeadReg), ATA_DEVICE);
+    set(offset_of!(IDEREGS, bCommandReg), code);
+    // bDriveNumber stays 0: the handle already names the drive.
+    input
+}
+
+/// Sends a read command through the disk driver's S.M.A.R.T. interface.
+fn ata_through_driver(file: &File, command: AtaRead) -> io::Result<Vec<u8>> {
+    let data = offset_of!(SENDCMDOUTPARAMS, bBuffer);
+    let mut reply = vec![0u8; data + HEALTH_PAGE];
+    let n = ioctl(
+        file,
+        SMART_RCV_DRIVE_DATA,
+        &smart_request(command),
+        &mut reply,
+    )?;
+    let error = reply[offset_of!(SENDCMDOUTPARAMS, DriverStatus)];
+    if error != 0 {
+        return Err(io::Error::other(format!(
+            "the drive refused the command (error {error})"
+        )));
+    }
+    if n < data + HEALTH_PAGE {
+        return Err(short_reply());
+    }
+    Ok(reply[data..data + HEALTH_PAGE].to_vec())
+}
+
+/// ATA PASS-THROUGH (16) from SCSI/ATA Translation (SAT-3): a PIO data-in
+/// command reading one 512-byte block.
+fn sat_cdb(command: AtaRead) -> [u8; 16] {
+    let (features, mid, high, code) = command.registers();
+    let mut cdb = [0u8; 16];
+    cdb[0] = 0x85; // ATA PASS-THROUGH (16)
+    cdb[1] = 4 << 1; // protocol 4, PIO data-in; 28-bit command
+    cdb[2] = 0x0E; // data from the device, counted in blocks, length in the sector count
+    cdb[4] = features;
+    cdb[6] = 1; // sector count
+    cdb[8] = 1; // LBA low (sector number)
+    cdb[10] = mid;
+    cdb[12] = high;
+    cdb[13] = ATA_DEVICE;
+    cdb[14] = code;
+    cdb
+}
+
+/// Sense data bytes asked for with pass-through commands.
+const SENSE_BYTES: usize = 32;
+
+/// SCSI_PASS_THROUGH followed by its sense and data buffers.
+fn sat_request(command: AtaRead) -> (Vec<u8>, usize) {
+    let header = size_of::<SCSI_PASS_THROUGH>();
+    let sense = header;
+    let data = (header + SENSE_BYTES).next_multiple_of(8);
+    let mut buffer = vec![0u8; data + HEALTH_PAGE];
+    put(
+        &mut buffer,
+        offset_of!(SCSI_PASS_THROUGH, Length),
+        &u16::try_from(header).unwrap_or(u16::MAX).to_le_bytes(),
+    );
+    buffer[offset_of!(SCSI_PASS_THROUGH, CdbLength)] = 16;
+    buffer[offset_of!(SCSI_PASS_THROUGH, SenseInfoLength)] =
+        u8::try_from(SENSE_BYTES).unwrap_or(u8::MAX);
+    buffer[offset_of!(SCSI_PASS_THROUGH, DataIn)] = u8::try_from(SCSI_IOCTL_DATA_IN).unwrap_or(1);
+    put(
+        &mut buffer,
+        offset_of!(SCSI_PASS_THROUGH, DataTransferLength),
+        &len32(HEALTH_PAGE).to_le_bytes(),
+    );
+    put(
+        &mut buffer,
+        offset_of!(SCSI_PASS_THROUGH, TimeOutValue),
+        &10u32.to_le_bytes(),
+    );
+    put(
+        &mut buffer,
+        offset_of!(SCSI_PASS_THROUGH, DataBufferOffset),
+        &data.to_le_bytes(),
+    );
+    put(
+        &mut buffer,
+        offset_of!(SCSI_PASS_THROUGH, SenseInfoOffset),
+        &len32(sense).to_le_bytes(),
+    );
+    put(
+        &mut buffer,
+        offset_of!(SCSI_PASS_THROUGH, Cdb),
+        &sat_cdb(command),
+    );
+    (buffer, data)
+}
+
+/// Sends a read command through a USB adapter's SCSI/ATA Translation.
+fn ata_through_usb_adapter(file: &File, command: AtaRead) -> io::Result<Vec<u8>> {
+    let (request, data) = sat_request(command);
+    let mut reply = vec![0u8; request.len()];
+    ioctl(file, IOCTL_SCSI_PASS_THROUGH, &request, &mut reply)?;
+    let status = reply[offset_of!(SCSI_PASS_THROUGH, ScsiStatus)];
+    if status != 0 {
+        return Err(io::Error::other(format!(
+            "the adapter refused the command (SCSI status {status:#04x})"
+        )));
+    }
+    Ok(reply[data..data + HEALTH_PAGE].to_vec())
+}
+
+/// Windows' failure prediction: whether the drive says it will fail, and
+/// (for ATA drives) its S.M.A.R.T. attribute page. Needs no write access.
+fn predict_failure(file: &File) -> io::Result<(bool, Vec<u8>)> {
+    let mut reply = vec![0u8; size_of::<STORAGE_PREDICT_FAILURE>()];
+    let n = ioctl(file, IOCTL_STORAGE_PREDICT_FAILURE, &[], &mut reply)?;
+    let page = offset_of!(STORAGE_PREDICT_FAILURE, VendorSpecific);
+    if n < page + HEALTH_PAGE {
+        return Err(short_reply());
+    }
+    let predicted = read_struct::<u32>(&reply, offset_of!(STORAGE_PREDICT_FAILURE, PredictFailure))
+        .ok_or_else(short_reply)?;
+    Ok((predicted != 0, reply[page..page + HEALTH_PAGE].to_vec()))
+}
+
+/// The NVMe SMART / Health Information log, asked of the device and then
+/// of its adapter (drivers answer one or the other).
+fn nvme_health_log(file: &File) -> io::Result<Vec<u8>> {
+    match nvme_query(file, StorageDeviceProtocolSpecificProperty) {
+        Ok(log) => Ok(log),
+        Err(_) => nvme_query(file, StorageAdapterProtocolSpecificProperty),
+    }
+}
+
+/// STORAGE_PROPERTY_QUERY with STORAGE_PROTOCOL_SPECIFIC_DATA in its
+/// AdditionalParameters, asking for a log page, and room for the page.
+fn nvme_request(property: i32) -> Vec<u8> {
+    let parameters = 8; // after PropertyId and QueryType
+    let specific = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>();
+    let mut query = vec![0u8; parameters + specific + HEALTH_PAGE];
+    put(&mut query, 0, &property.to_le_bytes());
+    put(&mut query, 4, &PropertyStandardQuery.to_le_bytes());
+    let mut field = |offset: usize, value: u32| {
+        put(&mut query, parameters + offset, &value.to_le_bytes());
+    };
+    let code = |value: i32| u32::try_from(value).unwrap_or(0);
+    field(
+        offset_of!(STORAGE_PROTOCOL_SPECIFIC_DATA, ProtocolType),
+        code(ProtocolTypeNvme),
+    );
+    field(
+        offset_of!(STORAGE_PROTOCOL_SPECIFIC_DATA, DataType),
+        code(NVMeDataTypeLogPage),
+    );
+    field(
+        offset_of!(STORAGE_PROTOCOL_SPECIFIC_DATA, ProtocolDataRequestValue),
+        code(NVME_LOG_PAGE_HEALTH_INFO),
+    );
+    field(
+        offset_of!(STORAGE_PROTOCOL_SPECIFIC_DATA, ProtocolDataOffset),
+        len32(specific),
+    );
+    field(
+        offset_of!(STORAGE_PROTOCOL_SPECIFIC_DATA, ProtocolDataLength),
+        len32(HEALTH_PAGE),
+    );
+    query
+}
+
+fn nvme_query(file: &File, property: i32) -> io::Result<Vec<u8>> {
+    let request = nvme_request(property);
+    let mut reply = vec![0u8; request.len()];
+    let n = ioctl(file, IOCTL_STORAGE_QUERY_PROPERTY, &request, &mut reply)?;
+    let reply = &reply[..n];
+    let specific = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, ProtocolSpecificData);
+    let value = |field: usize| read_struct::<u32>(reply, specific + field).ok_or_else(short_reply);
+    let offset = value(offset_of!(
+        STORAGE_PROTOCOL_SPECIFIC_DATA,
+        ProtocolDataOffset
+    ))? as usize;
+    let length = value(offset_of!(
+        STORAGE_PROTOCOL_SPECIFIC_DATA,
+        ProtocolDataLength
+    ))? as usize;
+    if length < HEALTH_PAGE {
+        return Err(short_reply());
+    }
+    let start = specific.checked_add(offset).ok_or_else(short_reply)?;
+    reply
+        .get(start..start + HEALTH_PAGE)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(short_reply)
 }
 
 // ---------------------------------------------------------------- elevation
@@ -621,6 +991,68 @@ mod tests {
             r#""C:\My Images\a.img""#
         );
         assert_eq!(quote_argument(""), r#""""#);
+    }
+
+    #[test]
+    fn smart_requests_carry_read_commands_only() {
+        let request = smart_request(AtaRead::SmartData);
+        assert_eq!(request.len(), 33, "SENDCMDINPARAMS is packed");
+        assert_eq!(request[..4], 512u32.to_le_bytes());
+        // Features, count, number, LBA mid, LBA high, device, command.
+        assert_eq!(request[4..11], [0xD0, 1, 1, 0x4F, 0xC2, 0xA0, 0xB0]);
+        assert_eq!(smart_request(AtaRead::SmartThresholds)[4], 0xD1);
+        assert_eq!(
+            smart_request(AtaRead::Identify)[4..11],
+            [0, 1, 1, 0, 0, 0xA0, 0xEC]
+        );
+    }
+
+    #[test]
+    fn usb_adapter_requests_are_ata_pass_through_reads() {
+        let cdb = sat_cdb(AtaRead::SmartData);
+        assert_eq!(
+            cdb,
+            [
+                0x85, 0x08, 0x0E, 0, 0xD0, 0, 1, 0, 1, 0, 0x4F, 0, 0xC2, 0xA0, 0xB0, 0
+            ]
+        );
+        let (request, data) = sat_request(AtaRead::Identify);
+        assert_eq!(request.len(), data + 512);
+        let cdb_at = offset_of!(SCSI_PASS_THROUGH, Cdb);
+        assert_eq!(request[cdb_at + 14], 0xEC);
+        assert_eq!(request[offset_of!(SCSI_PASS_THROUGH, DataIn)], 1, "data in");
+        let offset_at = offset_of!(SCSI_PASS_THROUGH, DataBufferOffset);
+        assert_eq!(
+            request[offset_at..offset_at + 8],
+            (data as u64).to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn nvme_requests_ask_for_the_health_log() {
+        let request = nvme_request(StorageDeviceProtocolSpecificProperty);
+        assert_eq!(request.len(), 8 + 40 + 512);
+        let u32_at = |at: usize| u32::from_le_bytes(request[at..at + 4].try_into().unwrap());
+        assert_eq!(u32_at(0), 50, "StorageDeviceProtocolSpecificProperty");
+        assert_eq!(u32_at(8), 3, "NVMe");
+        assert_eq!(u32_at(12), 2, "log page");
+        assert_eq!(u32_at(16), 2, "health log");
+        assert_eq!(u32_at(24), 40, "data after the request");
+        assert_eq!(u32_at(28), 512);
+    }
+
+    #[test]
+    fn smart_pages_and_identify_flags() {
+        let mut page = vec![0u8; 512];
+        assert!(!has_attributes(&page));
+        page[2 + 12 * 3] = 5;
+        assert!(has_attributes(&page));
+        assert!(!has_attributes(&page[..100]));
+        let mut identify = vec![0u8; 512];
+        identify[164] = 1; // word 82: supported
+        assert!(smart_turned_off(&identify));
+        identify[170] = 1; // word 85: turned on
+        assert!(!smart_turned_off(&identify));
     }
 
     #[test]

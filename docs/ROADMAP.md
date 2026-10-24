@@ -17,6 +17,10 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
   image and map files when copying.
 - **Copies only write where the user said.** A new image file, or a disk the user
   confirmed by typing its name; never the source disk or the disk Windows runs from.
+- **Partition changes wait for Apply.** The partition manager (Phase 9) only lists
+  changes until the user applies them and types the disk's name. It saves the old
+  partition tables first so every change can be undone, and refuses a disk that a
+  scan, recovery or copy is using.
 - **Damaged disks are untrusted input.** Parsers must never panic or crash on corrupted
   data, and are fuzz-tested. Use `get()` instead of indexing, and checked arithmetic
   on any number read from disk.
@@ -27,7 +31,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 - Rust engine (`crates/`), shared by the command-line tool (`apps/cli`) and the desktop app.
 - Desktop app: Tauri 2 + React + TypeScript (`apps/gui`).
 - CI on Windows (GitHub Actions). One Linux job builds the test disk images;
-  Linux and macOS app builds start in Phase 10.
+  Linux and macOS app builds start in Phase 11.
 
 ## Phases
 
@@ -42,8 +46,30 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
 | 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | Done for ext2/3/4, HFS+, APFS and btrfs (APFS: see the note); ReFS deferred (see the note) |
-| 9 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor and partition restore; E01, VHD and VMDK images | — | |
-| 10 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
+| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | In progress (part 1) |
+| 10 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor; E01, VHD and VMDK images | — | |
+| 11 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
+
+### Phase 9: partition manager
+
+Partition management as in tools like EaseUS Partition Master, built from the
+same public specifications as the rest of DataReco (no code, names, UI or
+artwork copied). Every part is tested on image files first, never real disks.
+
+| Part | Delivers | Writes |
+|---|---|---|
+| 1. Disk map and health | A map of each disk: partitions, file systems, drive letters and unallocated space. S.M.A.R.T. health for SATA and NVMe drives, with a verdict. Surface test (read every sector, time it, draw bad and slow areas). Read speed test (sequential and random) | Nothing |
+| 2. Partition tables | Pending changes with a preview of the result, written only on Apply: create and delete partitions, set active, hide, change type, name and attributes, initialize a disk (MBR or GPT), MBR↔GPT for data disks, primary↔logical. The old tables are saved first, and undo writes them back. Putting a lost partition found by search back in the table (partition restore, moved here from Phase 10) | Partition tables |
+| 3. Format and wipe | FAT32 (including over 32 GiB, which Windows refuses) and exFAT formatted by DataReco and checked with its own readers; NTFS through Windows. Volume label and drive letter. Wiping a partition or disk | Yes |
+| 4. Resize and move | NTFS shrink and extend through Windows (also on C: while it runs). Moving partitions block by block, with a journal on another disk so a power cut can be carried on from. 4K alignment. Extending C: past a recovery partition by moving it | Yes |
+| 5. Clone and migrate | Cloning a partition; cloning a disk onto a smaller one (used space only); moving Windows to another disk (boot files through Windows' bcdboot). Builds on the Phase 7 copy engine | Yes |
+
+Later, if asked for: a bootable USB (WinPE) for working on the Windows disk
+offline, MBR→GPT for the Windows disk, and boot repair. Not planned: merging
+partitions, in-place NTFS↔FAT32 conversion and changing cluster sizes (each needs
+writing NTFS or FAT structures file by file), dynamic disks, disk clean-up and app
+moving, password reset, and write speed tests (writing a test file could overwrite
+deleted files someone wants back).
 
 Note on Phase 5 and `ntfs-reformatted`: the full scan finds the old NTFS volume
 (from its backup boot sector) and opens it, but very likely with no files in it. On
@@ -105,7 +131,7 @@ Each release is a version tag (`v0.1.0`, …) on `main`. Pushing it runs
 `.github/workflows/release.yml`, which builds the Windows executables and attaches
 them to a draft GitHub release to look over and publish; see
 [RELEASING.md](RELEASING.md). Before the first public release: choose a license
-(see the README), and consider code signing (Phase 10) so Windows doesn't warn
+(see the README), and consider code signing (Phase 11) so Windows doesn't warn
 about an unknown publisher.
 
 Not planned unless asked for: a DOS version; DMDE-style tools that create or delete
@@ -121,7 +147,8 @@ crates/
   fs/          ntfs, fat, exfat, then ext, hfs, apfs, refs, btrfs      (Phases 4, 8)
   scan/        quick scan, full scan, raw recovery                     (Phases 5, 6)
   imaging/     image, clone, multi-pass copy                           (Phase 7)
-  raid/        virtual RAID                                            (Phase 9)
+  health/      S.M.A.R.T., surface test, speed test                    (Phase 9)
+  raid/        virtual RAID                                            (Phase 10)
 apps/
   cli/         `datareco` command-line tool
   gui/         Tauri + React desktop app

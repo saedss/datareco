@@ -596,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "datareco-fs",
+ "datareco-health",
  "datareco-imaging",
  "datareco-io",
  "datareco-partitions",
@@ -622,6 +623,7 @@ name = "datareco-gui"
 version = "0.1.0"
 dependencies = [
  "datareco-fs",
+ "datareco-health",
  "datareco-imaging",
  "datareco-io",
  "datareco-partitions",
@@ -632,6 +634,15 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+]
+
+[[package]]
+name = "datareco-health"
+version = "0.1.0"
+dependencies = [
+ "datareco-io",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
