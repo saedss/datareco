@@ -15,8 +15,9 @@ and more.
 > speed), changes partition tables (create, delete, hide, convert MBR↔GPT, put
 > lost partitions back, undo), formats partitions (FAT32 of any size, exFAT,
 > NTFS), wipes them, changes labels and drive letters, moves partitions (with a
-> journal that carries on after a power cut) and resizes NTFS ones through
-> Windows. Cloning partitions and moving Windows to another disk come next; see
+> journal that carries on after a power cut), resizes NTFS ones through
+> Windows, and copies partitions or whole disks onto other disks, used space
+> only (so a smaller disk will do), moving Windows to a new disk included. See
 > the [roadmap](docs/ROADMAP.md).
 
 ## Using it
@@ -84,6 +85,16 @@ administrator** when it needs to.
     partition through Windows (which moves files out of the way when
     shrinking), C: included while Windows runs from it; growing needs free
     space right after the partition.
+  - **Copy to another disk** copies the whole disk, or the partition picked
+    on the map, onto another disk. Only the space files use is copied (for
+    NTFS, FAT and exFAT; other partitions whole), so a smaller disk will do
+    as long as the partitions fit: they're moved closer together if they
+    have to be. A whole disk goes over everything on the target; one
+    partition goes into free space there and is added to its partition table
+    (backed up first, so **Undo a change** takes it off again). On the disk
+    Windows runs from the button says **Move Windows to another disk**: C:
+    is read from a snapshot Windows takes, and the copy keeps the disk's IDs
+    so Windows starts from it once you start the computer from the new disk.
 - **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and
   btrfs volumes on the disk: folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
@@ -152,6 +163,10 @@ datareco move disk1 -p 2 --to-sector 2048 --apply disk1   # copies it there, wit
 datareco move disk1 --resume --apply disk1             # carry on a move that was cut off
 datareco align disk1 -p 1 --apply disk1                # onto the nearest 1 MiB boundary
 datareco resize disk1 -p 2 --size 50GiB --apply disk1  # NTFS, through Windows (or min, max)
+datareco migrate disk0 --to disk2                      # shows how disk0's partitions would go onto disk2
+datareco migrate disk0 --to disk2 --apply disk2        # copies them, used space only (Windows too)
+datareco migrate disk1 --to disk2 --space-after 2 --apply disk2   # spare room after partition 2
+datareco clone-partition disk1 -p 2 --to disk2 --apply disk2      # into free space on disk2
 datareco label E: "Holiday 2026"                       # or without a label to remove it
 datareco letter E: F                                   # or "none" to take the letter away
 datareco find backup.img --text "IMPORTANT" --ignore-case
@@ -222,6 +237,16 @@ or an image file path.
   the one the move started from, and refuses if it isn't. A move can't be
   undone from the table backup: to put a partition back, move it back. Moving
   refuses the disk Windows runs from.
+- **Copying to another disk only reads the source.** While it copies, the
+  source's volumes are closed so nothing changes them; on the disk Windows
+  runs from, its NTFS volumes are read from a snapshot Windows takes instead
+  (BitLocker volumes there are refused: turn BitLocker off first). The target's
+  partition table is written last, so a copy that stops leaves no partition
+  pointing at half-copied data; run it again. Copying refuses to write onto
+  the source disk or the disk Windows runs from. A copy of Windows' disk keeps
+  the disk's IDs, which Windows needs to start from it; while both disks are
+  connected, Windows keeps one of them offline. Other disks' copies get new
+  IDs, so both can be used side by side.
 - **Health checks only read.** Windows passes S.M.A.R.T. commands to SATA drives
   only through a handle opened for writing, so the health check opens one; it
   sends three read-only commands through it (read the attributes, read their

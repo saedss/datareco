@@ -18,6 +18,7 @@ use datareco_relocate::{default_journal_dir, unfinished};
 use serde::Serialize;
 use tauri::State;
 
+use crate::clones::Clones;
 use crate::copies::Copies;
 use crate::files::{FileSystems, Recoveries};
 use crate::health::DiskTests;
@@ -52,6 +53,7 @@ pub struct Busy<'a> {
     pub tests: State<'a, DiskTests>,
     pub wipes: State<'a, Wipes>,
     pub moves: State<'a, Moves>,
+    pub clones: State<'a, Clones>,
 }
 
 /// The source opened anew (and its cache entry dropped), so what's read
@@ -128,6 +130,7 @@ pub fn apply_table(
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
     moves: State<'_, Moves>,
+    clones: State<'_, Clones>,
     id: String,
     ops: Vec<Operation>,
     confirmation: String,
@@ -140,6 +143,7 @@ pub fn apply_table(
         tests,
         wipes,
         moves,
+        clones,
     };
     check_not_busy(&spec, &busy)?;
     // Planned again on a freshly opened disk: what's written must be what
@@ -220,6 +224,7 @@ pub fn undo_table(
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
     moves: State<'_, Moves>,
+    clones: State<'_, Clones>,
     id: String,
     backup: String,
     confirmation: String,
@@ -232,6 +237,7 @@ pub fn undo_table(
         tests,
         wipes,
         moves,
+        clones,
     };
     check_not_busy(&spec, &busy)?;
     let disk = Disk::open(&spec)?;
@@ -307,6 +313,8 @@ pub(crate) fn check_nothing_running(
         Some("Wiping")
     } else if uses(busy.moves.sources_in_use()) {
         Some("Moving a partition")
+    } else if uses(busy.clones.sources_in_use()) {
+        Some("Copying partitions")
     } else {
         None
     };

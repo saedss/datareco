@@ -849,3 +849,255 @@ fn a_moves_table_change_is_not_undone_on_its_own() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---------------------------------------------------------------- copying to another disk
+
+/// A 256 MiB GPT disk: EFI at 1 MiB (16 MiB), NTFS at 100 MiB (32 MiB),
+/// Linux at 200 MiB (8 MiB).
+fn gpt_disk() -> Image {
+    let mut image = Image::new(256 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Gpt },
+        Operation::Create {
+            start_lba: MIB,
+            sectors: 16 * MIB,
+            type_code: "efi".into(),
+            logical: false,
+            name: Some("EFI system partition".into()),
+        },
+        create(100 * MIB, 32 * MIB, "ntfs"),
+        create(200 * MIB, 8 * MIB, "linux"),
+    ]);
+    image
+}
+
+/// Copies `source`'s partitions onto a blank disk of `sectors`, writes the
+/// new table and reads it back.
+fn copy_disk(source: &Image, sectors: u64, options: &DiskCopyOptions) -> (DiskCopy, Image) {
+    let copy = plan_disk_copy(&source.disk(), "Disk 9", sectors, 512, options).unwrap();
+    assert_eq!(copy.blocked, None);
+    assert_eq!(copy.problem, None);
+    let mut target = Image::new(sectors);
+    target.write(&copy.writes);
+    (copy, target)
+}
+
+fn places(copy: &DiskCopy) -> Vec<(u64, u64)> {
+    copy.parts.iter().map(|p| (p.from_lba, p.to_lba)).collect()
+}
+
+#[test]
+fn copying_a_disk_keeps_places_when_they_fit() {
+    let source = gpt_disk();
+    let options = DiskCopyOptions::default();
+    let (copy, target) = copy_disk(&source, 512 * MIB, &options);
+    assert!(!copy.packed);
+    assert_eq!(
+        places(&copy),
+        [(MIB, MIB), (100 * MIB, 100 * MIB), (200 * MIB, 200 * MIB)]
+    );
+    let (before, after) = (source.table(), target.table());
+    assert_eq!(
+        after.disk_sectors,
+        512 * MIB,
+        "the backup GPT is at the new end"
+    );
+    assert_eq!(shape(&after), shape(&before));
+    assert_ne!(after.disk_id, before.disk_id, "a new disk GUID");
+    assert_ne!(after.partitions[1].guid, before.partitions[1].guid);
+    assert_eq!(after.partitions[0].name, before.partitions[0].name);
+    assert!(
+        copy.warnings[0].contains("left unused, at the end"),
+        "{:?}",
+        copy.warnings
+    );
+    assert_eq!(copy.boot_sectors, 0, "nothing to carry over on GPT");
+
+    let keep = DiskCopyOptions {
+        keep_ids: true,
+        ..DiskCopyOptions::default()
+    };
+    let (_, target) = copy_disk(&source, 512 * MIB, &keep);
+    let after = target.table();
+    assert_eq!(after.disk_id, before.disk_id);
+    assert_eq!(after.partitions[1].guid, before.partitions[1].guid);
+}
+
+#[test]
+fn copying_a_disk_onto_a_smaller_one_closes_the_gaps() {
+    let source = gpt_disk();
+    let (copy, target) = copy_disk(&source, 96 * MIB, &DiskCopyOptions::default());
+    assert!(copy.packed);
+    assert_eq!(
+        places(&copy),
+        [(MIB, MIB), (100 * MIB, 17 * MIB), (200 * MIB, 49 * MIB)]
+    );
+    assert_eq!(copy.needed_sectors, 57 * MIB + 33);
+    let after = target.table();
+    assert_eq!(
+        after
+            .partitions
+            .iter()
+            .map(|p| (p.start_lba, p.sectors))
+            .collect::<Vec<_>>(),
+        [(MIB, 16 * MIB), (17 * MIB, 32 * MIB), (49 * MIB, 8 * MIB)]
+    );
+
+    // Too small even closed up, or asked to keep places: says what's needed.
+    let small = plan_disk_copy(
+        &source.disk(),
+        "Disk 9",
+        40 * MIB,
+        512,
+        &DiskCopyOptions::default(),
+    )
+    .unwrap();
+    let problem = small.problem.unwrap();
+    assert!(
+        problem.contains("needs to hold at least 57.0 MiB"),
+        "{problem}"
+    );
+    let same = DiskCopyOptions {
+        same_places: true,
+        ..DiskCopyOptions::default()
+    };
+    let kept = plan_disk_copy(&source.disk(), "Disk 9", 96 * MIB, 512, &same).unwrap();
+    assert!(
+        kept.problem
+            .unwrap()
+            .contains("have to stay where they are")
+    );
+    assert!(kept.writes.is_empty());
+}
+
+#[test]
+fn spare_room_can_go_after_a_partition() {
+    let source = gpt_disk();
+    let options = DiskCopyOptions {
+        space_after: Some(100 * MIB),
+        ..DiskCopyOptions::default()
+    };
+    let (copy, target) = copy_disk(&source, 512 * MIB, &options);
+    assert!(copy.packed);
+    // GPT's backup copy takes the last 33 sectors: the last partition ends
+    // on the last 1 MiB boundary before them.
+    assert_eq!(
+        places(&copy),
+        [(MIB, MIB), (100 * MIB, 17 * MIB), (200 * MIB, 503 * MIB)]
+    );
+    target.table();
+    assert!(
+        copy.warnings[0].contains("right after partition 2"),
+        "{:?}",
+        copy.warnings
+    );
+}
+
+#[test]
+fn copying_an_mbr_disk_packs_its_logical_partitions() {
+    // Gaps: NTFS at 1 MiB, logical ones at 18 and 35 MiB; moved apart first.
+    let mut source = mbr_disk();
+    let plan = plan_move(&source.disk(), 35 * MIB, 50 * MIB).unwrap();
+    source.write(&plan.writes);
+    let (copy, target) = copy_disk(&source, 48 * MIB, &DiskCopyOptions::default());
+    assert!(copy.packed);
+    assert_eq!(copy.boot_sectors, MIB - 1);
+    let after = target.table();
+    assert_eq!(
+        shape(&after),
+        [
+            (1, P, MIB, 16 * MIB, "0x07".into()),
+            (2, Ext, 17 * MIB, 26 * MIB, "0x0F".into()),
+            (5, L, 18 * MIB, 16 * MIB, "0x83".into()),
+            (6, L, 35 * MIB, 8 * MIB, "0x0C".into()),
+        ]
+    );
+    let before = source.table();
+    assert_ne!(after.disk_id, before.disk_id, "a new disk signature");
+}
+
+#[test]
+fn copying_a_disk_needs_the_same_sector_size() {
+    let source = gpt_disk();
+    let copy = plan_disk_copy(
+        &source.disk(),
+        "Disk 9",
+        1 << 20,
+        4096,
+        &DiskCopyOptions::default(),
+    )
+    .unwrap();
+    assert!(copy.blocked.unwrap().contains("4096-byte sectors"));
+    let empty = Image::new(64 * MIB);
+    let copy = plan_disk_copy(
+        &empty.disk(),
+        "Disk 9",
+        64 * MIB,
+        512,
+        &DiskCopyOptions::default(),
+    )
+    .unwrap();
+    assert!(copy.blocked.unwrap().contains("no partitions to copy"));
+}
+
+#[test]
+fn copying_one_partition_into_free_space() {
+    let source = mbr_disk();
+    let mut target = gpt_disk();
+    let copy = plan_partition_copy(&source.disk(), MIB, &target.disk(), 20 * MIB).unwrap();
+    assert_eq!(copy.plan.blocked, None);
+    assert_eq!(copy.plan.error, None);
+    let part = copy.part.clone().unwrap();
+    assert_eq!(
+        (part.from_lba, part.to_lba, part.sectors),
+        (MIB, 20 * MIB, 16 * MIB)
+    );
+    assert!(
+        copy.plan.steps[0].description.starts_with(
+            "Copy partition 1 (NTFS, exFAT or HPFS, 16.0 MiB) from Test disk to sector"
+        ),
+        "{:?}",
+        copy.plan.steps
+    );
+    target.write(&copy.plan.writes);
+    let after = target.table();
+    let added = after
+        .partitions
+        .iter()
+        .find(|p| p.start_lba == 20 * MIB)
+        .unwrap();
+    assert_eq!(
+        added.type_name, "Microsoft basic data",
+        "MBR 0x07 became basic data"
+    );
+    assert_eq!(added.sectors, 16 * MIB);
+
+    // Into the extended partition of an MBR disk: a logical partition.
+    let mut mbr = mbr_disk();
+    let copy = plan_partition_copy(&target.disk(), 200 * MIB, &mbr.disk(), 44 * MIB).unwrap();
+    assert!(copy.part.as_ref().unwrap().logical);
+    mbr.write(&copy.plan.writes);
+    let logical: Vec<_> = mbr
+        .table()
+        .partitions
+        .iter()
+        .filter(|p| p.kind == L)
+        .map(|p| (p.start_lba, p.type_code.clone()))
+        .collect();
+    assert_eq!(
+        logical,
+        [
+            (18 * MIB, "0x83".into()),
+            (35 * MIB, "0x0C".into()),
+            (44 * MIB, "0x83".into())
+        ]
+    );
+
+    // Over a partition, or past the end: explained.
+    let over = plan_partition_copy(&source.disk(), MIB, &target.disk(), 90 * MIB).unwrap();
+    assert!(over.plan.error.unwrap().message.contains("overlaps"));
+    assert!(over.part.is_none());
+    assert!(over.plan.writes.is_empty());
+    let past = plan_partition_copy(&source.disk(), MIB, &target.disk(), 250 * MIB).unwrap();
+    assert!(past.plan.error.unwrap().message.contains("past the end"));
+}

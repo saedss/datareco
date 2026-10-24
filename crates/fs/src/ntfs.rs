@@ -47,6 +47,9 @@ pub(crate) struct Ntfs {
     volume: Volume,
     info: VolumeInfo,
     cluster_size: u64,
+    /// Clusters in the volume, from its boot sector. NTFS counts one sector
+    /// less than its partition, so the backup boot sector is past them.
+    clusters: u64,
     record_size: u64,
     /// The MFT itself (`$MFT`'s data). Empty if it can't be located.
     mft: Stream,
@@ -203,6 +206,7 @@ impl Ntfs {
             },
             volume,
             cluster_size,
+            clusters: total_sectors / per_cluster,
             record_size,
             mft: Stream {
                 name: String::new(),
@@ -893,6 +897,19 @@ impl Ntfs {
 impl FileSystem for Ntfs {
     fn info(&self) -> &VolumeInfo {
         &self.info
+    }
+
+    fn allocation(&self) -> Option<crate::Allocation> {
+        let bitmap = self.cluster_bitmap()?;
+        let count = self
+            .clusters
+            .min(self.volume.size() / self.cluster_size)
+            .min(bitmap.len() as u64 * 8);
+        let mut ranges = crate::Ranges::default();
+        // The boot sector, whatever $Bitmap says about cluster 0.
+        ranges.add(0, self.cluster_size);
+        ranges.add_bits(&bitmap, count, 0, self.cluster_size);
+        Some(ranges.finish(count * self.cluster_size))
     }
 
     fn root(&self) -> EntryId {

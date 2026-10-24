@@ -24,6 +24,18 @@ pub(crate) fn open_disk_for_writing(_number: u32, _volumes: &[String]) -> Result
 
 pub(crate) fn update_disk_properties(_file: &File) {}
 
+pub(crate) fn close_volumes(_volumes: &[String], _disk: &str) -> Result<Vec<File>> {
+    Err(unsupported("Closing volumes"))
+}
+
+pub(crate) fn take_snapshot(_volume: &str) -> Result<(String, String)> {
+    Err(unsupported("Volume snapshots"))
+}
+
+pub(crate) fn delete_snapshot(_id: &str) -> Result<()> {
+    Err(unsupported("Volume snapshots"))
+}
+
 pub(crate) fn open_volume_for_writing(_path: &str) -> Result<OpenedVolume> {
     Err(unsupported("Writing to volumes"))
 }

@@ -507,6 +507,82 @@ export type MovePreview = {
 
 export type ResizeLimits = { min: number; max: number; now: number; confirmation: string };
 
+// ---------------------------------------------------------------- copying to another disk
+
+export type ClonePhase = "copying" | "fixingBoot" | "writingTable" | "done";
+
+export type CloneProgress = {
+  phase: ClonePhase;
+  description: string;
+  /** Bytes to copy (used space only), and copied. */
+  total: number;
+  done: number;
+  bytesPerSecond: number;
+  /** Bytes the source couldn't give: zeros on the copy. */
+  unreadable: number;
+  finished: boolean;
+  /** The target's table backup (a partition copied into free space). */
+  backup: string | null;
+};
+
+export type CloneTarget = {
+  number: number;
+  name: string;
+  model: string;
+  size: number;
+  sectorSize: number;
+  problem: string | null;
+};
+
+export type CloneInfo = { windows: boolean; targets: CloneTarget[] };
+
+/** A partition and where its copy goes. */
+export type PlacedPart = {
+  number: number;
+  what: string;
+  fromLba: number;
+  toLba: number;
+  sectors: number;
+  logical: boolean;
+};
+
+/** How the copy reads the source: volumes closed, read from snapshots, or as they are. */
+export type CloneReading = { closed: string[]; snapshots: string[]; live: string[]; problem: string | null };
+
+export type DiskCopyPreview = {
+  copy: {
+    blocked: string | null;
+    problem: string | null;
+    parts: PlacedPart[];
+    packed: boolean;
+    neededSectors: number;
+    warnings: string[];
+  };
+  bytes: number;
+  reading: CloneReading;
+  windows: boolean;
+  keepIds: boolean;
+  confirmation: string | null;
+  /** The target's volumes, erased. */
+  erasing: string[];
+  problem: string | null;
+};
+
+export type FreeSpace = { startLba: number; sectors: number; logical: boolean };
+
+export type PartitionCopyPreview = {
+  description: string | null;
+  part: PlacedPart | null;
+  at: number | null;
+  bytes: number;
+  reading: CloneReading;
+  free: FreeSpace[];
+  confirmation: string | null;
+  /** The target's volumes, closed while it copies. */
+  closing: string[];
+  problem: string | null;
+};
+
 export type CommandError = {
   kind:
     | "access_denied"
@@ -749,6 +825,26 @@ export const api = {
   resizeLimits: (id: string, startLba: number) => invoke<ResizeLimits>("resize_limits", { id, startLba }),
   resizePartition: (id: string, startLba: number, size: number, confirmation: string) =>
     invoke<void>("resize_partition", { id, startLba, size, confirmation }),
+
+  /** The disks a copy of this source could go onto. */
+  cloneInfo: (id: string) => invoke<CloneInfo>("clone_info", { id }),
+  previewDiskCopy: (id: string, target: number, keepIds: boolean | null, spaceAfter: number | null) =>
+    invoke<DiskCopyPreview>("preview_disk_copy", { id, target, keepIds, spaceAfter }),
+  /** Starts copying the disk onto `target`; then call continueClone. */
+  startDiskCopy: (
+    id: string,
+    target: number,
+    keepIds: boolean | null,
+    spaceAfter: number | null,
+    confirmation: string,
+  ) => invoke<CloneProgress>("start_disk_copy", { id, target, keepIds, spaceAfter, confirmation }),
+  previewPartitionCopy: (id: string, startLba: number, target: number, at: number | null) =>
+    invoke<PartitionCopyPreview>("preview_partition_copy", { id, startLba, target, at }),
+  startPartitionCopy: (id: string, startLba: number, target: number, at: number, confirmation: string) =>
+    invoke<CloneProgress>("start_partition_copy", { id, startLba, target, at, confirmation }),
+  continueClone: (id: string) => invoke<CloneProgress>("continue_clone", { id }),
+  /** Stops a copy: the source isn't changed; start it again to copy. */
+  stopClone: (id: string) => invoke<boolean>("stop_clone", { id }),
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

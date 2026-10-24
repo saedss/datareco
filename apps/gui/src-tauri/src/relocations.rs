@@ -16,6 +16,7 @@ use datareco_relocate::{MoveProgress, Mover, align_target, default_journal_dir, 
 use serde::Serialize;
 use tauri::State;
 
+use crate::clones::Clones;
 use crate::copies::Copies;
 use crate::files::{FileSystems, Recoveries};
 use crate::health::DiskTests;
@@ -201,6 +202,7 @@ pub fn start_move(
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
     moves: State<'_, Moves>,
+    clones: State<'_, Clones>,
     id: String,
     start_lba: Option<u64>,
     new_start_lba: Option<u64>,
@@ -217,6 +219,7 @@ pub fn start_move(
         tests,
         wipes,
         moves,
+        clones,
     };
     // Not `check_not_busy`: that refuses while a move is unfinished, and
     // this carries it on (`Mover::begin` refuses a second one).
@@ -334,6 +337,7 @@ pub fn resize_partition(
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
     moves: State<'_, Moves>,
+    clones: State<'_, Clones>,
     id: String,
     start_lba: u64,
     size: u64,
@@ -356,6 +360,7 @@ pub fn resize_partition(
             tests,
             wipes,
             moves,
+            clones,
         },
     )?;
     let disk = Disk::open(&spec)?;

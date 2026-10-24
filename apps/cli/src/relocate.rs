@@ -33,7 +33,8 @@ pub struct MoveRequest<'a> {
     pub apply: Option<&'a str>,
 }
 
-fn partition(disk: &Disk, source: &str, number: u32) -> Result<Partition, CliError> {
+/// Partition `number` of `disk` (not the extended one), or why not.
+pub(crate) fn partition(disk: &Disk, source: &str, number: u32) -> Result<Partition, CliError> {
     read_table(disk)?
         .partitions
         .into_iter()

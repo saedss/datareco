@@ -14,6 +14,7 @@
 //! write (after the person confirmed) and keeps them open while moving.
 
 mod boot;
+pub use boot::fix as fix_boot_sector;
 #[cfg(test)]
 mod tests;
 

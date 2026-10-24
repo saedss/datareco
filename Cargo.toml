@@ -4,6 +4,7 @@ members = ["crates/*", "apps/cli", "apps/gui/src-tauri"]
 # Plain `cargo build` / `cargo test` skip the desktop app, because it needs the
 # frontend built first (`npm run build` in apps/gui). Build it with `-p datareco-gui`.
 default-members = [
+    "crates/clone",
     "crates/format",
     "crates/fs",
     "crates/health",
@@ -56,6 +57,7 @@ datareco-health = { path = "crates/health" }
 datareco-scan = { path = "crates/scan" }
 datareco-imaging = { path = "crates/imaging" }
 datareco-relocate = { path = "crates/relocate" }
+datareco-clone = { path = "crates/clone" }
 sha2 = "0.10"
 
 [workspace.lints.rust]

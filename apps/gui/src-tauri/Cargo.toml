@@ -11,6 +11,7 @@ publish.workspace = true
 tauri-build.workspace = true
 
 [dependencies]
+datareco-clone.workspace = true
 datareco-format.workspace = true
 datareco-fs.workspace = true
 datareco-health.workspace = true

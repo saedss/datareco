@@ -329,7 +329,12 @@ impl EditableTable {
 
     /// Fails if any partition (and, with `logical_only`, only logical ones)
     /// uses sectors `start..end`.
-    fn check_free(&self, start: u64, end: u64, logical_only: bool) -> Result<(), String> {
+    pub(super) fn check_free(
+        &self,
+        start: u64,
+        end: u64,
+        logical_only: bool,
+    ) -> Result<(), String> {
         let taken = self
             .parts
             .iter()
@@ -341,7 +346,7 @@ impl EditableTable {
         }
     }
 
-    fn free_slot(&self) -> Option<usize> {
+    pub(super) fn free_slot(&self) -> Option<usize> {
         (0..4).find(|slot| {
             !self.parts.iter().any(|p| !p.logical && p.slot == *slot)
                 && self.extended.as_ref().is_none_or(|e| e.slot != *slot)
@@ -350,7 +355,7 @@ impl EditableTable {
 
     /// Puts a new logical partition in the chain, making an extended
     /// partition around it when there's none.
-    fn place_logical(&mut self, part: &mut Part) -> Result<(), String> {
+    pub(super) fn place_logical(&mut self, part: &mut Part) -> Result<(), String> {
         let (start, end) = (part.start, part.end());
         part.logical = true;
         let Some(e) = self.extended.clone() else {

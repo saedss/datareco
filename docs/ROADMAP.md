@@ -46,7 +46,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
 | 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | Done for ext2/3/4, HFS+, APFS and btrfs (APFS: see the note); ReFS deferred (see the note) |
-| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | In progress (parts 1–4 done) |
+| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | Done on test images (parts 1–5); real-disk runs and extending C: past a recovery partition still to come (see the notes) |
 | 10 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor; E01, VHD and VMDK images | — | |
 | 11 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -62,7 +62,7 @@ artwork copied). Every part is tested on image files first, never real disks.
 | 2. Partition tables | Pending changes with a preview of the result, written only on Apply: create and delete partitions, set active, hide, change type, name and attributes, initialize a disk (MBR or GPT), MBR↔GPT for data disks, primary↔logical. The old tables are saved first, and undo writes them back. Putting a lost partition found by search back in the table (partition restore, moved here from Phase 10) | Partition tables |
 | 3. Format and wipe | FAT32 (including over 32 GiB, which Windows refuses) and exFAT formatted by DataReco and checked with its own readers; NTFS through Windows. Volume label and drive letter. Wiping a partition or disk | Yes |
 | 4. Resize and move | NTFS shrink and extend through Windows (also on C: while it runs). Moving partitions block by block, with a journal on another disk so a power cut can be carried on from. 1 MiB alignment. Extending C: past a recovery partition by moving it (deferred to its own PR, see the note) | Yes |
-| 5. Clone and migrate | Cloning a partition; cloning a disk onto a smaller one (used space only); moving Windows to another disk (boot files through Windows' bcdboot). Builds on the Phase 7 copy engine | Yes |
+| 5. Clone and migrate | Cloning a partition into free space on another disk; cloning a disk onto a smaller one (used space only, closing up the gaps between partitions); moving Windows to another disk (read from snapshots, keeping the disk's IDs so its boot entries still point at the copy). Builds on the Phase 7 copy engine | Yes |
 
 Later, if asked for: a bootable USB (WinPE) for working on the Windows disk
 offline, MBR→GPT for the Windows disk, and boot repair. Not planned: merging
@@ -113,6 +113,23 @@ superblock copy at 64 MiB are tested on volumes built in memory, and the `btrfs`
 test image (mkfs.btrfs, the kernel driver) checks real ones in CI. Not yet:
 compressed data (zlib, lzo, zstd), volumes spanning several disks, and deleted
 files (old tree nodes, as with APFS).
+
+Note on Phase 9, part 5 (clone and migrate): copying is tested on disks in
+memory: a GPT disk with FAT32, exFAT and an unreadable partition onto a smaller
+disk (the gaps closed up, free clusters left uncopied, every file read back,
+boot sectors updated), one partition into free space on an MBR disk with its
+table change undone, MBR boot code after sector 0, reading from a snapshot, and
+a target that fails partway (no table is left pointing at half a copy). Which
+clusters are in use is tested for NTFS, FAT12/16/32 and exFAT. The command line
+copies between image files end to end. Not run yet: copying onto a real disk,
+Windows' snapshots (Volume Shadow Copy) of the running Windows volume, and
+starting Windows from a copy. Windows is moved by keeping the disk's IDs
+rather than rebuilding its boot files with bcdboot: on GPT disks Windows' boot
+entries name partitions by their IDs, so they find the copy wherever its
+partitions are; on MBR disks they name them by where they start, so there the
+partitions keep their places (shrink C: first, with Resize, if the new disk is
+smaller). Shrinking a partition as part of the copy would need an NTFS
+resizer of DataReco's own, and isn't planned.
 
 Note on Phase 9, part 4 (resize and move): moving is tested on MBR and GPT disks
 in memory (far and by a little, in both directions), with a power cut injected
@@ -179,6 +196,9 @@ crates/
   scan/        quick scan, full scan, raw recovery                     (Phases 5, 6)
   imaging/     image, clone, multi-pass copy                           (Phase 7)
   health/      S.M.A.R.T., surface test, speed test                    (Phase 9)
+  format/      FAT32 and exFAT formatters, wiping                      (Phase 9)
+  relocate/    moving partitions, with a journal                       (Phase 9)
+  clone/       copying partitions and disks, used space only           (Phase 9)
   raid/        virtual RAID                                            (Phase 10)
 apps/
   cli/         `datareco` command-line tool
