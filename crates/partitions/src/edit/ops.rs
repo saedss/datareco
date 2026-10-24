@@ -755,6 +755,142 @@ impl EditableTable {
         })
     }
 
+    // ------------------------------------------------------------ move
+
+    /// Points the partition at `start` to `new_start` instead, keeping its
+    /// size. Its new place must be free (or its own old place); logical
+    /// partitions stay inside the extended one, with room for their boot
+    /// records.
+    pub(crate) fn move_partition(&mut self, start: u64, new_start: u64) -> Outcome {
+        let style = self.style_or_explain()?;
+        let index = self.find(start)?;
+        if start == new_start {
+            return Err("It already starts there.".into());
+        }
+        let part = self.parts[index].clone();
+        let what = self.describe(&part);
+        let new_end = new_start
+            .checked_add(part.sectors)
+            .filter(|&end| end <= self.disk_sectors)
+            .ok_or("That goes past the end of the disk.")?;
+        if let Some(other) = self
+            .parts
+            .iter()
+            .enumerate()
+            .find(|(i, p)| *i != index && new_start < p.end() && new_end > p.start)
+            .map(|(_, p)| p)
+        {
+            return Err(format!("There it would overlap {}.", self.describe(other)));
+        }
+        match style {
+            Style::Gpt => {
+                let (first, last) = self.usable();
+                if new_start < first || new_end - 1 > last {
+                    return Err(format!(
+                        "Partitions on this disk must be within sectors {first}–{last}."
+                    ));
+                }
+            }
+            Style::Mbr if !part.logical => {
+                if new_start == 0 || new_start > u64::from(u32::MAX) {
+                    return Err("An MBR table can't describe that place.".into());
+                }
+                if self
+                    .extended
+                    .as_ref()
+                    .is_some_and(|e| new_start < e.end() && new_end > e.start)
+                {
+                    return Err("That's inside the extended partition.".into());
+                }
+            }
+            Style::Mbr => {
+                let e = self
+                    .extended
+                    .clone()
+                    .ok_or("There's no extended partition.")?;
+                if new_start <= e.start || new_end > e.end() {
+                    return Err("Logical partitions move within the extended partition.".into());
+                }
+                let others: Vec<Part> = self
+                    .logicals()
+                    .into_iter()
+                    .filter(|l| l.start != start)
+                    .cloned()
+                    .collect();
+                let previous_end = others
+                    .iter()
+                    .map(Part::end)
+                    .filter(|&e| e <= new_start)
+                    .max();
+                let ebr = match previous_end {
+                    None => e.start,
+                    Some(end) => end.max(new_start.saturating_sub(self.align())),
+                };
+                if ebr >= new_start {
+                    return Err("There's no free sector before it for its boot record.".into());
+                }
+                self.parts[index].ebr = ebr;
+                // The one after it needs its boot record clear of it.
+                if let Some(next) = others
+                    .iter()
+                    .filter(|l| l.start >= new_end)
+                    .min_by_key(|l| l.start)
+                    && next.ebr < new_end
+                {
+                    if new_end >= next.start {
+                        return Err(
+                            "There's no free sector left for the next partition's boot record."
+                                .into(),
+                        );
+                    }
+                    if let Some(p) = self
+                        .parts
+                        .iter_mut()
+                        .find(|p| p.logical && p.start == next.start)
+                    {
+                        p.ebr = new_end;
+                    }
+                }
+            }
+        }
+        self.parts[index].start = new_start;
+        self.first_logical_at_extended_start();
+        let distance = new_start.abs_diff(start);
+        Ok(Step {
+            description: format!(
+                "Move {what} {} {} (to sector {new_start})",
+                self.size(distance),
+                if new_start < start {
+                    "towards the start"
+                } else {
+                    "towards the end"
+                }
+            ),
+            warnings: vec![
+                "Its data is copied to the new place first; if the power goes, the move carries on \
+                 from its journal."
+                    .into(),
+            ],
+        })
+    }
+
+    /// The first logical partition's boot record is the extended
+    /// partition's first sector.
+    fn first_logical_at_extended_start(&mut self) {
+        let Some(e) = self.extended.clone() else {
+            return;
+        };
+        let first = self.logicals().first().map(|l| l.start);
+        if let Some(first) = first
+            && let Some(p) = self
+                .parts
+                .iter_mut()
+                .find(|p| p.logical && p.start == first)
+        {
+            p.ebr = e.start;
+        }
+    }
+
     // ------------------------------------------------------------ primary ↔ logical
 
     fn make_logical(&mut self, start: u64) -> Outcome {

@@ -7,6 +7,7 @@ mod imaging;
 mod manage;
 mod partitions;
 mod raw;
+mod relocate;
 mod scan;
 mod structures;
 mod table;
@@ -266,6 +267,62 @@ enum Command {
         partition: Option<u32>,
         letter: String,
     },
+    /// Move a partition to another place on its disk, block by block. A journal
+    /// on another disk lets a move stopped by a power cut or Ctrl+C carry on
+    /// (--resume). Shows the move; moves only with --apply and the disk's name.
+    Move {
+        /// A disk (disk1) or image file path.
+        source: String,
+        /// The partition, by its number in `datareco partitions`.
+        #[arg(long, short)]
+        partition: Option<u32>,
+        /// Its new first sector.
+        #[arg(long, conflicts_with = "by")]
+        to_sector: Option<u64>,
+        /// How far: +100MiB (towards the end), -1GiB (towards the start), +2048s.
+        #[arg(long, allow_hyphen_values = true)]
+        by: Option<String>,
+        /// Carry on this disk's unfinished move.
+        #[arg(long, conflicts_with_all = ["partition", "to_sector", "by"])]
+        resume: bool,
+        /// Where the journal goes (default: %LOCALAPPDATA%\DataReco\moves).
+        #[arg(long)]
+        journal_dir: Option<PathBuf>,
+        /// Where the old partition table's backup goes.
+        #[arg(long)]
+        backup_dir: Option<PathBuf>,
+        /// Write it, typing the disk's name (disk1) or the image's file name.
+        #[arg(long)]
+        apply: Option<String>,
+    },
+    /// Move a partition to the nearest 1 MiB boundary, as SSDs and drives
+    /// with 4 KiB sectors work best with.
+    Align {
+        /// A disk (disk1) or image file path.
+        source: String,
+        #[arg(long, short)]
+        partition: u32,
+        #[arg(long)]
+        journal_dir: Option<PathBuf>,
+        #[arg(long)]
+        backup_dir: Option<PathBuf>,
+        #[arg(long)]
+        apply: Option<String>,
+    },
+    /// Shrink or grow an NTFS partition through Windows (C: too, while it
+    /// runs). Growing needs free space right after it.
+    Resize {
+        /// A disk (disk1).
+        source: String,
+        #[arg(long, short)]
+        partition: u32,
+        /// The new size (50GiB, 500MiB), or min or max.
+        #[arg(long)]
+        size: String,
+        /// Do it, typing the disk's name (disk1).
+        #[arg(long)]
+        apply: Option<String>,
+    },
     /// Search for lost partitions (after a wiped or damaged partition table).
     FindPartitions {
         /// A disk (disk0) or image file path.
@@ -433,7 +490,21 @@ enum Command {
     },
 }
 
+/// Stack for the thread commands run on. clap's parser for this many
+/// commands needs more than Windows' default 1 MiB in debug builds.
+const STACK: usize = 16 << 20;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .name("datareco".into())
+        .stack_size(STACK)
+        .spawn(run)
+        .map_or(ExitCode::FAILURE, |thread| {
+            thread.join().unwrap_or(ExitCode::FAILURE)
+        })
+}
+
+fn run() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Disks { json } => disks(json),
         Command::Read {
@@ -452,6 +523,43 @@ fn main() -> ExitCode {
         Command::Partitions { source } => partitions::show(&source),
         Command::FindPartitions { source, full } => partitions::find(&source, full),
         Command::Map { source } => health::map(&source),
+        Command::Move {
+            source,
+            partition,
+            to_sector,
+            by,
+            resume,
+            journal_dir,
+            backup_dir,
+            apply,
+        } => relocate::move_partition(&relocate::MoveRequest {
+            source: &source,
+            partition,
+            to_sector,
+            by: by.as_deref(),
+            resume,
+            journal_dir: journal_dir.as_deref(),
+            backup_dir: backup_dir.as_deref(),
+            apply: apply.as_deref(),
+        }),
+        Command::Align {
+            source,
+            partition,
+            journal_dir,
+            backup_dir,
+            apply,
+        } => relocate::align(
+            &source,
+            partition,
+            (journal_dir.as_deref(), backup_dir.as_deref()),
+            apply.as_deref(),
+        ),
+        Command::Resize {
+            source,
+            partition,
+            size,
+            apply,
+        } => relocate::resize(&source, partition, &size, apply.as_deref()),
         Command::Format {
             source,
             partition,

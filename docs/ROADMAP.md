@@ -46,7 +46,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
 | 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | Done for ext2/3/4, HFS+, APFS and btrfs (APFS: see the note); ReFS deferred (see the note) |
-| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | In progress (parts 1–3 done) |
+| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | In progress (parts 1–4 done) |
 | 10 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor; E01, VHD and VMDK images | — | |
 | 11 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -61,7 +61,7 @@ artwork copied). Every part is tested on image files first, never real disks.
 | 1. Disk map and health | A map of each disk: partitions, file systems, drive letters and unallocated space. S.M.A.R.T. health for SATA and NVMe drives, with a verdict. Surface test (read every sector, time it, draw bad and slow areas). Read speed test (sequential and random) | Nothing |
 | 2. Partition tables | Pending changes with a preview of the result, written only on Apply: create and delete partitions, set active, hide, change type, name and attributes, initialize a disk (MBR or GPT), MBR↔GPT for data disks, primary↔logical. The old tables are saved first, and undo writes them back. Putting a lost partition found by search back in the table (partition restore, moved here from Phase 10) | Partition tables |
 | 3. Format and wipe | FAT32 (including over 32 GiB, which Windows refuses) and exFAT formatted by DataReco and checked with its own readers; NTFS through Windows. Volume label and drive letter. Wiping a partition or disk | Yes |
-| 4. Resize and move | NTFS shrink and extend through Windows (also on C: while it runs). Moving partitions block by block, with a journal on another disk so a power cut can be carried on from. 4K alignment. Extending C: past a recovery partition by moving it | Yes |
+| 4. Resize and move | NTFS shrink and extend through Windows (also on C: while it runs). Moving partitions block by block, with a journal on another disk so a power cut can be carried on from. 1 MiB alignment. Extending C: past a recovery partition by moving it (deferred to its own PR, see the note) | Yes |
 | 5. Clone and migrate | Cloning a partition; cloning a disk onto a smaller one (used space only); moving Windows to another disk (boot files through Windows' bcdboot). Builds on the Phase 7 copy engine | Yes |
 
 Later, if asked for: a bootable USB (WinPE) for working on the Windows disk
@@ -113,6 +113,19 @@ superblock copy at 64 MiB are tested on volumes built in memory, and the `btrfs`
 test image (mkfs.btrfs, the kernel driver) checks real ones in CI. Not yet:
 compressed data (zlib, lzo, zstd), volumes spanning several disks, and deleted
 files (old tree nodes, as with APFS).
+
+Note on Phase 9, part 4 (resize and move): moving is tested on MBR and GPT disks
+in memory (far and by a little, in both directions), with a power cut injected
+at every stage, torn writes included, and each move carried on from its journal;
+the FAT32 and exFAT volumes moved must read back file for file. The command line
+moves and aligns partitions in image files end to end. Where the table points
+after a move, logical partitions included, is tested with the other table
+changes; the NTFS boot sector update on a hand-made boot sector. Moving on a
+real disk, and resizing through Windows (which needs administrator rights and a
+real NTFS partition), haven't been run yet. Extending C: past the recovery partition
+after it (moving the recovery partition to the end, then growing C:) is left
+for its own PR: it needs testing in a virtual machine, since a mistake there
+stops Windows starting.
 
 Note on Phase 9, part 3 (format and wipe): the FAT32 and exFAT formatters are
 checked field by field against Microsoft's specifications (boot sectors and their

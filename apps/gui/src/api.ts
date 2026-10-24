@@ -476,6 +476,37 @@ export type FormatPreview = { spot: SpotInfo; summary: FormatSummary | null; pro
 
 export type WipeProgress = { total: number; done: number; bytesPerSecond: number; finished: boolean };
 
+// ---------------------------------------------------------------- moving and resizing
+
+export type MovePhase = "copying" | "fixingBoot" | "writingTable" | "done";
+
+export type MoveProgress = {
+  phase: MovePhase;
+  description: string;
+  /** Bytes to copy, and copied. */
+  total: number;
+  done: number;
+  bytesPerSecond: number;
+  finished: boolean;
+  journal: string;
+  /** The partition table's backup, once written. */
+  backup: string | null;
+};
+
+/** A move that didn't finish: how far it got, or why it can't carry on. */
+export type UnfinishedMove = { journal: string; progress: MoveProgress | null; problem: string | null };
+
+export type MovePreview = {
+  description: string | null;
+  problem: string | null;
+  bytes: number;
+  confirmation: string | null;
+  closing: string[];
+  journalDir: string;
+};
+
+export type ResizeLimits = { min: number; max: number; now: number; confirmation: string };
+
 export type CommandError = {
   kind:
     | "access_denied"
@@ -702,6 +733,22 @@ export const api = {
   setLabel: (id: string, startLba: number | null, label: string) => invoke<void>("set_label", { id, startLba, label }),
   setLetter: (id: string, startLba: number | null, letter: string | null) =>
     invoke<void>("set_letter", { id, startLba, letter }),
+
+  previewMove: (id: string, startLba: number, newStartLba: number) =>
+    invoke<MovePreview>("preview_move", { id, startLba, newStartLba }),
+  /** Where a partition would start on a 1 MiB boundary it has room for (its own start if aligned). */
+  alignTarget: (id: string, startLba: number) => invoke<number | null>("align_partition_target", { id, startLba }),
+  unfinishedMove: (id: string) =>
+    invoke<UnfinishedMove | null>("unfinished_move", { id }),
+  /** Starts a move (or, with nulls, carries on the unfinished one); then call continueMove. */
+  startMove: (id: string, startLba: number | null, newStartLba: number | null, confirmation: string) =>
+    invoke<MoveProgress>("start_move", { id, startLba, newStartLba, confirmation }),
+  continueMove: (id: string) => invoke<MoveProgress>("continue_move", { id }),
+  /** Stops a move; its journal stays so it can carry on. */
+  stopMove: (id: string) => invoke<MoveProgress | null>("stop_move", { id }),
+  resizeLimits: (id: string, startLba: number) => invoke<ResizeLimits>("resize_limits", { id, startLba }),
+  resizePartition: (id: string, startLba: number, size: number, confirmation: string) =>
+    invoke<void>("resize_partition", { id, startLba, size, confirmation }),
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

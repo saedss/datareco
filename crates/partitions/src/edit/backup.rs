@@ -41,7 +41,15 @@ pub struct TableBackup {
     /// For an undo: the file name of the backup it undid.
     #[serde(default)]
     pub undoes: Option<String>,
+    /// False for a change that moved data too (a partition move): putting
+    /// back only its table would point at data that has moved.
+    #[serde(default = "yes")]
+    pub undoable: bool,
     pub sectors: Vec<SavedSectors>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Sectors as they were and as they were written, in hex.
@@ -66,6 +74,8 @@ pub struct BackupInfo {
     pub undoes: Option<String>,
     /// Whether a later undo put this change back.
     pub undone: bool,
+    /// Whether undo can put it back (not for partition moves).
+    pub undoable: bool,
 }
 
 /// Where backups go unless told otherwise: `%LOCALAPPDATA%\DataReco\
@@ -88,6 +98,8 @@ pub struct Change<'a> {
     pub writes: &'a [SectorWrite],
     /// For an undo: the backup file it undoes.
     pub undoes: Option<&'a Path>,
+    /// False when data moved too, so undoing the table alone would do harm.
+    pub undoable: bool,
 }
 
 /// Saves the sectors a change replaces to a new backup file in
@@ -100,42 +112,76 @@ pub fn apply_writes(
     target: &mut dyn SectorTarget,
     backup_dir: &Path,
 ) -> Result<PathBuf> {
+    let sector_size = u64::from(disk.sector_size());
+    let mut befores = Vec::new();
+    for write in change.writes {
+        let mut before = vec![0u8; write.data.len()];
+        disk.read_at(write.lba * sector_size, &mut before)?;
+        befores.push(before);
+    }
+    let facts = DiskFacts {
+        name: disk.name().to_owned(),
+        size: disk.size(),
+        sector_size: disk.sector_size(),
+    };
+    apply_known_writes(&facts, change, &befores, target, backup_dir)
+}
+
+/// What a backup records about its disk.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskFacts {
+    pub name: String,
+    pub size: u64,
+    pub sector_size: u32,
+}
+
+/// Like [`apply_writes`], with the sectors' old contents already known
+/// (`befores`, one per write): read when a long operation started and
+/// checked since.
+pub fn apply_known_writes(
+    facts: &DiskFacts,
+    change: &Change<'_>,
+    befores: &[Vec<u8>],
+    target: &mut dyn SectorTarget,
+    backup_dir: &Path,
+) -> Result<PathBuf> {
     let writes = change.writes;
-    if target.sector_size() != disk.sector_size() {
+    if target.sector_size() != facts.sector_size {
         return Err(Error::Refused {
             reason: "The disk opened for writing has a different sector size.".into(),
         });
     }
-    let sector_size = u64::from(disk.sector_size());
-    let mut saved = Vec::new();
-    for write in writes {
-        let mut before = vec![0u8; write.data.len()];
-        disk.read_at(write.lba * sector_size, &mut before)?;
-        saved.push(SavedSectors {
+    let sector_size = u64::from(facts.sector_size);
+    let saved = writes
+        .iter()
+        .zip(befores)
+        .map(|(write, before)| SavedSectors {
             lba: write.lba,
-            before: to_hex(&before),
+            before: to_hex(before),
             after: to_hex(&write.data),
-        });
-    }
+        })
+        .collect();
     let backup = TableBackup {
         version: BACKUP_VERSION,
         source: change.source.to_owned(),
-        disk: disk.name().to_owned(),
-        size: disk.size(),
-        sector_size: disk.sector_size(),
+        disk: facts.name.clone(),
+        size: facts.size,
+        sector_size: facts.sector_size,
         created: now(),
         changes: change.changes.to_vec(),
         undoes: change
             .undoes
             .and_then(Path::file_name)
             .map(|name| name.to_string_lossy().into_owned()),
+        undoable: change.undoable,
         sectors: saved,
     };
     let path = save(&backup, backup_dir).map_err(|e| Error::Io {
         name: format!("the backup in {}", backup_dir.display()),
         source: e,
     })?;
-    let name = disk.name().to_owned();
+    let name = facts.name.clone();
     for write in writes {
         target
             .write_at(write.lba * sector_size, &write.data)
@@ -170,6 +216,13 @@ pub fn undo_writes(
     disk: &Disk,
     backup: &TableBackup,
 ) -> Result<std::result::Result<Vec<SectorWrite>, String>> {
+    if !backup.undoable {
+        return Ok(Err(
+            "This change moved a partition's data as well as its table entry, so putting back \
+             only the table would point at data that has moved. Move the partition back instead."
+                .into(),
+        ));
+    }
     if backup.size != disk.size() || backup.sector_size != disk.sector_size() {
         return Ok(Err(format!(
             "This backup is of a {}-byte disk with {}-byte sectors; {} is different.",
@@ -241,6 +294,7 @@ pub fn list_backups(dir: &Path, source: &str) -> Vec<BackupInfo> {
                 changes: backup.changes,
                 undoes: backup.undoes,
                 undone: false,
+                undoable: backup.undoable,
             })
         })
         .collect();
@@ -261,7 +315,7 @@ pub fn list_backups(dir: &Path, source: &str) -> Vec<BackupInfo> {
 pub fn next_to_undo(dir: &Path, source: &str) -> Option<BackupInfo> {
     list_backups(dir, source)
         .into_iter()
-        .find(|b| b.undoes.is_none() && !b.undone)
+        .find(|b| b.undoes.is_none() && !b.undone && b.undoable)
 }
 
 fn save(backup: &TableBackup, dir: &Path) -> io::Result<PathBuf> {

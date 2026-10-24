@@ -534,6 +534,7 @@ fn applying_saves_a_backup_that_undoes_it() {
         changes: &plan.descriptions(),
         writes: &plan.writes,
         undoes: None,
+        undoable: true,
     };
     let path = apply_writes(&disk, &change, &mut target, &dir).unwrap();
     let changed = Image {
@@ -564,6 +565,7 @@ fn applying_saves_a_backup_that_undoes_it() {
         changes: &["Undo: Convert the disk to GPT".to_owned()],
         writes: &undo,
         undoes: Some(&path),
+        undoable: true,
     };
     apply_writes(&changed.disk(), &change, &mut undone, &dir).unwrap();
     assert_eq!(undone.data(), &original[..], "every byte back");
@@ -743,4 +745,107 @@ fn converting_warns_about_data_it_writes_over() {
             .any(|w| w.contains("last 33 sectors hold data")),
         "{warnings:?}"
     );
+}
+
+#[test]
+fn moving_partitions_changes_only_where_the_table_points() {
+    let mut image = mbr_disk();
+    // The FAT32 logical partition, further into the extended partition.
+    let plan = plan_move(&image.disk(), 35 * MIB, 50 * MIB).unwrap();
+    assert!(plan.is_ready(), "{plan:#?}");
+    assert!(
+        plan.steps[0]
+            .description
+            .contains("15.0 MiB towards the end"),
+        "{:?}",
+        plan.steps
+    );
+    image.write(&plan.writes);
+    let logical: Vec<_> = image
+        .table()
+        .partitions
+        .iter()
+        .filter(|p| p.kind == L)
+        .map(|p| (p.number, p.start_lba, p.sectors))
+        .collect();
+    assert_eq!(logical, [(5, 18 * MIB, 16 * MIB), (6, 50 * MIB, 8 * MIB)]);
+
+    // The first logical partition, over part of its own old place: its boot
+    // record stays the extended partition's first sector.
+    let plan = plan_move(&image.disk(), 18 * MIB, 20 * MIB).unwrap();
+    image.write(&plan.writes);
+    assert_eq!(image.table().partitions[2].start_lba, 20 * MIB);
+
+    let refused = |from, to| {
+        plan_move(&image.disk(), from, to)
+            .unwrap()
+            .error
+            .unwrap()
+            .message
+    };
+    assert!(refused(MIB, 2 * MIB).contains("inside the extended partition"));
+    assert!(refused(20 * MIB, 45 * MIB).contains("overlap partition 6"));
+    assert!(refused(50 * MIB, 60 * MIB).contains("past the end"));
+    assert!(refused(20 * MIB, 20 * MIB).contains("already starts there"));
+    assert!(refused(3, 4).contains("no partition starting at sector 3"));
+    // With the primary partition gone, its space is outside the extended one.
+    image.run(&[Operation::Delete { start_lba: MIB }]);
+    let error = plan_move(&image.disk(), 50 * MIB, 2 * MIB)
+        .unwrap()
+        .error
+        .unwrap();
+    assert!(
+        error.message.contains("within the extended partition"),
+        "{error:?}"
+    );
+
+    let mut gpt = Image::new(64 * MIB);
+    gpt.run(&[
+        Operation::Initialize { style: Style::Gpt },
+        create(MIB, 8 * MIB, "ntfs"),
+    ]);
+    let plan = plan_move(&gpt.disk(), MIB, 30 * MIB).unwrap();
+    gpt.write(&plan.writes);
+    assert_eq!(gpt.table().partitions[0].start_lba, 30 * MIB);
+    let error = plan_move(&gpt.disk(), 30 * MIB, 60 * MIB)
+        .unwrap()
+        .error
+        .unwrap();
+    assert!(
+        error.message.contains("past the end") || error.message.contains("within sectors"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_moves_table_change_is_not_undone_on_its_own() {
+    let image = mbr_disk();
+    let dir = std::env::temp_dir().join(format!("datareco-move-backups-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let disk = image.disk();
+    let plan = plan_move(&disk, 35 * MIB, 50 * MIB).unwrap();
+    let mut target = MemoryTarget::with_data(image.data.clone(), 512);
+    let change = Change {
+        source: "image:move.img",
+        changes: &plan.descriptions(),
+        writes: &plan.writes,
+        undoes: None,
+        undoable: false,
+    };
+    let path = apply_writes(&disk, &change, &mut target, &dir).unwrap();
+    let listed = list_backups(&dir, "image:move.img");
+    assert!(!listed[0].undoable);
+    assert_eq!(next_to_undo(&dir, "image:move.img"), None);
+    let moved = Image {
+        data: target.data().to_vec(),
+        sector_size: 512,
+    };
+    let refused = undo_writes(&moved.disk(), &read_backup(&path).unwrap())
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        refused.contains("Move the partition back instead"),
+        "{refused}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

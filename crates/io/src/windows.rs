@@ -264,7 +264,6 @@ pub(crate) fn format_with_windows(
     label: Option<&str>,
     quick: bool,
 ) -> Result<()> {
-    use std::os::windows::process::CommandExt;
     let name = SourceSpec::Volume(path.to_owned()).display_name();
     let quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
     let mut script = format!(
@@ -279,26 +278,79 @@ pub(crate) fn format_with_windows(
         script.push_str(" -Full");
     }
     script.push_str(" | Out-Null");
+    powershell(&script, &name, "Windows couldn't format it").map(|_| ())
+}
+
+/// Runs a PowerShell script for the Windows storage commands, and returns
+/// what it printed. On failure, the error says `failed` and the first line
+/// PowerShell gave as the reason.
+fn powershell(script: &str, name: &str, failed: &str) -> Result<String> {
+    use std::os::windows::process::CommandExt;
     // No console window flashing up behind the desktop app.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map_err(|e| Error::from_io("Windows' formatter", e))?;
+        .map_err(|e| Error::from_io("PowerShell", e))?;
     if output.status.success() {
-        return Ok(());
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
     let message = String::from_utf8_lossy(&output.stderr);
+    // The storage commands need administrator rights, like reading disks.
+    if message.contains("PermissionDenied") || message.contains("Access denied") {
+        return Err(Error::AccessDenied {
+            name: name.to_owned(),
+        });
+    }
     let first = message
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("it gave no reason");
     Err(Error::Io {
-        name,
-        source: io::Error::other(format!("Windows couldn't format it: {first}")),
+        name: name.to_owned(),
+        source: io::Error::other(format!("{failed}: {first}")),
     })
+}
+
+/// The partition starting `offset` bytes into disk `number`, for the
+/// storage commands.
+fn partition_query(number: u32, offset: u64) -> String {
+    format!(
+        "$p = Get-Partition -DiskNumber {number} -ErrorAction Stop | Where-Object {{ $_.Offset -eq {offset} }}; \
+         if (-not $p) {{ throw 'Windows has no partition starting there.' }}; "
+    )
+}
+
+pub(crate) fn partition_size_limits(number: u32, offset: u64) -> Result<(u64, u64)> {
+    let name = SourceSpec::PhysicalDisk(number).display_name();
+    let script = format!(
+        "{}$s = $p | Get-PartitionSupportedSize -ErrorAction Stop; \"$($s.SizeMin) $($s.SizeMax)\"",
+        partition_query(number, offset)
+    );
+    let out = powershell(
+        &script,
+        &name,
+        "Windows couldn't work out how far it can resize it",
+    )?;
+    let mut numbers = out.split_whitespace().map(str::parse::<u64>);
+    match (numbers.next(), numbers.next()) {
+        (Some(Ok(min)), Some(Ok(max))) => Ok((min, max)),
+        _ => Err(Error::Io {
+            name,
+            source: io::Error::other(format!("unexpected answer from Windows: {}", out.trim())),
+        }),
+    }
+}
+
+pub(crate) fn resize_with_windows(number: u32, offset: u64, size: u64) -> Result<()> {
+    let name = SourceSpec::PhysicalDisk(number).display_name();
+    let script = format!(
+        "{}$p | Resize-Partition -Size {size} -ErrorAction Stop",
+        partition_query(number, offset)
+    );
+    powershell(&script, &name, "Windows couldn't resize it").map(|_| ())
 }
 
 /// Asks Windows to read the disk's partition table again.

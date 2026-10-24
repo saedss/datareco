@@ -19,6 +19,7 @@ use crate::copies::Copies;
 use crate::files::{FileSystems, Recoveries};
 use crate::health::DiskTests;
 use crate::partitions::Searches;
+use crate::relocations::Moves;
 use crate::tables::{Busy, check_not_busy};
 use crate::{CommandError, OpenSources};
 
@@ -112,6 +113,7 @@ pub fn format_partition(
     copies: State<'_, Copies>,
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
+    moves: State<'_, Moves>,
     id: String,
     start_lba: Option<u64>,
     sectors: Option<u64>,
@@ -130,6 +132,7 @@ pub fn format_partition(
             copies,
             tests,
             wipes,
+            moves,
         },
     )?;
     let disk = Disk::open(&spec)?;
@@ -226,6 +229,7 @@ pub fn start_wipe(
     copies: State<'_, Copies>,
     tests: State<'_, DiskTests>,
     wipes: State<'_, Wipes>,
+    moves: State<'_, Moves>,
     id: String,
     start_lba: Option<u64>,
     sectors: Option<u64>,
@@ -246,6 +250,7 @@ pub fn start_wipe(
             copies,
             tests,
             wipes,
+            moves,
         };
         check_not_busy(&spec, &busy)?;
         let target = spot.open(&confirmation)?;

@@ -11,6 +11,7 @@ default-members = [
     "crates/io",
     "crates/partitions",
     "crates/raid",
+    "crates/relocate",
     "crates/scan",
     "crates/templates",
     "apps/cli",
@@ -54,6 +55,7 @@ datareco-fs = { path = "crates/fs" }
 datareco-health = { path = "crates/health" }
 datareco-scan = { path = "crates/scan" }
 datareco-imaging = { path = "crates/imaging" }
+datareco-relocate = { path = "crates/relocate" }
 sha2 = "0.10"
 
 [workspace.lints.rust]

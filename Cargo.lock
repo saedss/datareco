@@ -601,6 +601,7 @@ dependencies = [
  "datareco-imaging",
  "datareco-io",
  "datareco-partitions",
+ "datareco-relocate",
  "datareco-scan",
  "datareco-templates",
  "serde_json",
@@ -639,6 +640,7 @@ dependencies = [
  "datareco-imaging",
  "datareco-io",
  "datareco-partitions",
+ "datareco-relocate",
  "datareco-scan",
  "datareco-templates",
  "serde",
@@ -690,6 +692,18 @@ dependencies = [
 [[package]]
 name = "datareco-raid"
 version = "0.1.0"
+
+[[package]]
+name = "datareco-relocate"
+version = "0.1.0"
+dependencies = [
+ "datareco-format",
+ "datareco-fs",
+ "datareco-io",
+ "datareco-partitions",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "datareco-scan"

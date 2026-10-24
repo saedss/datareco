@@ -36,6 +36,14 @@ pub(crate) fn set_drive_letter(_path: &str, _letter: Option<char>) -> Result<()>
     Err(unsupported("Changing drive letters"))
 }
 
+pub(crate) fn partition_size_limits(_number: u32, _offset: u64) -> Result<(u64, u64)> {
+    Err(unsupported("Resizing NTFS"))
+}
+
+pub(crate) fn resize_with_windows(_number: u32, _offset: u64, _size: u64) -> Result<()> {
+    Err(unsupported("Resizing NTFS"))
+}
+
 pub(crate) fn format_with_windows(
     _path: &str,
     _file_system: &str,

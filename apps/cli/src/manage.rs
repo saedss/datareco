@@ -14,6 +14,7 @@ use datareco_partitions::{PartitionKind, TableKind, read_table};
 
 use crate::CliError;
 use crate::format::format_size;
+use crate::relocate::check_no_unfinished_move;
 
 /// How long each wipe step writes before showing progress.
 const STEP: Duration = Duration::from_millis(500);
@@ -121,6 +122,9 @@ fn parse_cluster(text: &str) -> Result<u32, CliError> {
 
 pub fn format(request: &FormatRequest<'_>) -> Result<(), CliError> {
     let spec = SourceSpec::parse(request.source);
+    if request.apply.is_some() {
+        check_no_unfinished_move(&spec)?;
+    }
     let disk = Arc::new(Disk::open(&spec)?);
     let (range, what) = range(&disk, request.source, request.partition)?;
     let devices = list_devices().ok();
@@ -259,6 +263,9 @@ pub fn wipe(
     apply: Option<&str>,
 ) -> Result<(), CliError> {
     let spec = SourceSpec::parse(source);
+    if apply.is_some() {
+        check_no_unfinished_move(&spec)?;
+    }
     let disk = Disk::open(&spec)?;
     let table = read_table(&disk)?;
     let (range, what) = match partition {

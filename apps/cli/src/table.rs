@@ -20,6 +20,7 @@ use datareco_partitions::{SegmentKind, disk_map, identify, layout, read_table};
 use crate::CliError;
 use crate::format::{format_size, format_time};
 use crate::health::print_map;
+use crate::relocate::check_no_unfinished_move;
 
 #[derive(Subcommand)]
 pub enum TableAction {
@@ -184,6 +185,7 @@ pub fn table(request: TableRequest<'_>) -> Result<(), CliError> {
         changes: &plan.descriptions(),
         writes: &plan.writes,
         undoes: None,
+        undoable: true,
     };
     write(&disk, &spec, &change, request.apply, &backup_dir)
 }
@@ -426,6 +428,7 @@ fn undo(
         changes: &changes,
         writes: &writes,
         undoes: Some(&path),
+        undoable: true,
     };
     write(disk, spec, &change, apply, backup_dir)
 }
@@ -438,6 +441,9 @@ fn write(
     apply: Option<&str>,
     backup_dir: &Path,
 ) -> Result<(), CliError> {
+    if apply.is_some() {
+        check_no_unfinished_move(spec)?;
+    }
     let (mut target, confirmation, closing): (Box<dyn SectorTarget>, String, Vec<String>) =
         match spec {
             SourceSpec::PhysicalDisk(number) => {

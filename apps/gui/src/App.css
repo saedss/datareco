@@ -400,6 +400,15 @@ input.invalid {
   background: var(--error-bg);
 }
 
+.banner.warning {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.banner button {
+  margin-left: 6px;
+}
+
 .notice {
   max-width: 520px;
   margin: 24px 0;
@@ -1872,6 +1881,13 @@ button.danger:disabled {
 
 .size-input {
   width: 90px;
+}
+
+.move-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .pending p {

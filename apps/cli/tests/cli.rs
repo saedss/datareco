@@ -1157,3 +1157,73 @@ fn format_and_wipe_show_first_and_write_with_apply() {
     );
     std::fs::remove_file(image).unwrap();
 }
+
+#[test]
+fn partitions_move_and_align_and_read_back() {
+    let image = temp_image("move.img", &vec![0u8; 96 << 20]);
+    let (img, name) = (
+        image.to_str().unwrap(),
+        image.file_name().unwrap().to_str().unwrap(),
+    );
+    let journal = temp_folder("move-journal");
+    let backups = temp_folder("move-backups");
+    let dirs = [
+        "--journal-dir",
+        journal.to_str().unwrap(),
+        "--backup-dir",
+        backups.to_str().unwrap(),
+    ];
+    let run = |args: &[&str]| {
+        let out = datareco(&[args, &dirs[..]].concat());
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        stdout(&out)
+    };
+    let table = |args: &[&str]| {
+        let mut all = vec!["table", img];
+        all.extend_from_slice(args);
+        all.extend_from_slice(&["--backup-dir", backups.to_str().unwrap(), "--apply", name]);
+        let out = datareco(&all);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+    };
+    table(&["init", "mbr"]);
+    table(&["create", "--size", "8MiB"]);
+    let out = datareco(&[
+        "format", img, "-p", "1", "--fs", "exfat", "--label", "Moving", "--apply", name,
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let preview = run(&["move", img, "-p", "1", "--by", "+40MiB"]);
+    assert!(
+        preview.contains("40.0 MiB towards the end") && preview.contains("Nothing was written"),
+        "{preview}"
+    );
+    run(&["move", img, "-p", "1", "--by", "+40MiB", "--apply", name]);
+    run(&["move", img, "-p", "1", "--by", "-3MiB", "--apply", name]);
+    let listing = stdout(&datareco(&["ls", img, "-p", "1"]));
+    assert!(listing.starts_with("exFAT \"Moving\""), "{listing}");
+    let parts = stdout(&datareco(&["partitions", img]));
+    assert!(parts.contains(&format!("{}", 38 * 2048)), "{parts}");
+
+    // An unaligned partition goes to the nearest 1 MiB boundary.
+    table(&["delete", "1"]);
+    table(&[
+        "restore",
+        "--start",
+        "4100",
+        "--sectors",
+        "8192",
+        "--type",
+        "ntfs",
+    ]);
+    let out = run(&["align", img, "-p", "1", "--apply", name]);
+    assert!(out.contains("Moved."), "{out}");
+    assert!(stdout(&datareco(&["partitions", img])).contains("4096"));
+    let out = run(&["align", img, "-p", "1"]);
+    assert!(out.contains("already starts on a 1 MiB boundary"), "{out}");
+
+    let out = datareco(&["resize", img, "-p", "1", "--size", "4MiB"]);
+    assert!(stderr(&out).contains("on disks"), "{}", stderr(&out));
+    std::fs::remove_file(image).unwrap();
+    let _ = std::fs::remove_dir_all(journal);
+    let _ = std::fs::remove_dir_all(backups);
+}

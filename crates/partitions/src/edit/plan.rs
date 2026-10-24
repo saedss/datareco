@@ -83,8 +83,13 @@ pub fn plan(disk: &Disk, ops: &[Operation]) -> Result<Plan> {
             }
         }
     }
+    finish(plan, &table, disk)
+}
+
+/// Fills in what a changed table would write: only the sectors that would
+/// really change (they're what gets backed up).
+fn finish(mut plan: Plan, table: &EditableTable, disk: &Disk) -> Result<Plan> {
     plan.style = table.style;
-    // Only sectors that would really change are written (and backed up).
     let sector_size = u64::from(disk.sector_size());
     for write in table.encode() {
         let mut current = vec![0u8; write.data.len()];
@@ -95,6 +100,45 @@ pub fn plan(disk: &Disk, ops: &[Operation]) -> Result<Plan> {
         }
     }
     Ok(plan)
+}
+
+/// What moving the partition at `start_lba` so it starts at `new_start_lba`
+/// does to the table. Only the table: the partition's data has to be moved
+/// first (`datareco-relocate` does both, in that order).
+pub fn plan_move(disk: &Disk, start_lba: u64, new_start_lba: u64) -> Result<Plan> {
+    let mut plan = Plan {
+        blocked: None,
+        style_before: None,
+        style: None,
+        steps: Vec::new(),
+        error: None,
+        writes: Vec::new(),
+        sectors_written: 0,
+    };
+    let mut table = match EditableTable::load(disk)? {
+        Ok(table) => table,
+        Err(reason) => {
+            plan.blocked = Some(reason);
+            return Ok(plan);
+        }
+    };
+    plan.style_before = table.style;
+    let mut changed = table.clone();
+    match changed
+        .move_partition(start_lba, new_start_lba)
+        .and_then(|step| {
+            changed
+                .check_layout()
+                .map(|()| step)
+                .map_err(|p| format!("That would leave the table invalid: {p}"))
+        }) {
+        Ok(step) => {
+            plan.steps.push(step);
+            table = changed;
+        }
+        Err(message) => plan.error = Some(StepError { step: 0, message }),
+    }
+    finish(plan, &table, disk)
 }
 
 /// The disk as it would read once `writes` are written: the same reads,
