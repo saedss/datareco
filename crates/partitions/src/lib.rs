@@ -1,12 +1,16 @@
 //! Partition tables (MBR with extended/logical partitions, GPT) and the search
 //! for lost partitions using boot sectors, superblocks and their backups.
 //!
-//! Everything here only reads. Disk data is untrusted: parsers use
-//! bounds-checked reads (`bytes` module) and never panic on garbage.
+//! Nothing here writes to a disk. The [`edit`] module works out the sectors
+//! a partition table change would write and keeps backups to undo it; the
+//! caller writes them, to a target it opened after the person confirmed.
+//! Disk data is untrusted: parsers use bounds-checked reads (`bytes`
+//! module) and never panic on garbage.
 
 mod boot;
 mod bytes;
 mod crc32;
+pub mod edit;
 mod gpt;
 mod layout;
 mod mbr;

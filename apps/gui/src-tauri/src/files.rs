@@ -241,6 +241,28 @@ pub fn file_extents(
 #[derive(Default)]
 pub struct Recoveries(Mutex<HashMap<String, Arc<AtomicBool>>>);
 
+impl Recoveries {
+    /// The sources files are being recovered from.
+    pub fn sources_in_use(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+}
+
+impl FileSystems {
+    /// Forgets every open file system, after a partition table changed.
+    pub fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+}
+
 /// Saves `items` (or, without them, everything on the volume but NTFS's own
 /// system files) into `destination`, reporting progress on `progress`.
 #[tauri::command(async)]

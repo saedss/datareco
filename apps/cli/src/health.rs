@@ -27,7 +27,7 @@ pub fn map(source: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn print_map(name: &str, map: &DiskMap) {
+pub(crate) fn print_map(name: &str, map: &DiskMap) {
     let table = &map.table;
     let sector = u64::from(table.sector_size);
     let kind = match table.kind {

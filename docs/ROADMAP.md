@@ -46,7 +46,7 @@ drives, USB sticks and SD cards (NTFS, FAT, exFAT).
 | 6 | Raw recovery | Recovery by file signature: JPEG, PNG, GIF, PDF, Office/ZIP, MP4/MOV, MP3, RAR/7z and more, with an editable signature list | Raw recovery finds the files in `fat32-no-fat` | Done |
 | 7 | Imaging and cloning | Disk to image, disk to disk, image to disk; failing-drive mode with a fast first pass, retry passes, reverse reading and a map file to resume | A copy with simulated bad sectors completes and resumes | Done (writing to real disks untested, see the note) |
 | 8 | More file systems | ext2/3/4 and HFS+, then APFS, ReFS and btrfs (one PR each) | Each reads its test image | Done for ext2/3/4, HFS+, APFS and btrfs (APFS: see the note); ReFS deferred (see the note) |
-| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | In progress (part 1) |
+| 9 | Partition manager | Disk map and health checks; partition table changes with undo; format and wipe; resize and move; clone and migrate (five parts, one PR each; see below) | Each part works on its test images; writing parts also on a spare disk | In progress (parts 1 and 2 done) |
 | 10 | Advanced tools | RAID constructor (0/1/4/5/6, JBOD, auto-detect); cluster map; write mode with undo for the disk editor; E01, VHD and VMDK images | — | |
 | 11 | Linux and macOS | Builds, root/admin handling, portable packaging, code signing | — | |
 
@@ -113,6 +113,15 @@ superblock copy at 64 MiB are tested on volumes built in memory, and the `btrfs`
 test image (mkfs.btrfs, the kernel driver) checks real ones in CI. Not yet:
 compressed data (zlib, lzo, zstd), volumes spanning several disks, and deleted
 files (old tree nodes, as with APFS).
+
+Note on Phase 9, part 2 (partition tables): every operation, both conversions,
+backups and undo are tested on disks built in memory and read back with the
+same reader as the rest of DataReco, including a run of random operations that
+must always leave a valid table, and putting back the partitions of a disk whose
+MBR was wiped. The command line is tested end to end on image files (changes,
+then undoing them all gives back the image byte for byte). Writing to a real disk
+(closing its volumes, Windows reading the new table) needs administrator rights
+and a spare disk, so it hasn't been run yet.
 
 Note on Phase 8, ReFS: deferred until there is a real ReFS volume to test
 against. Microsoft hasn't published the format, no sample images are public, and

@@ -263,6 +263,7 @@ mod tests {
             name: None,
             guid: None,
             bootable: false,
+            hidden: false,
             file_system: None,
         }
     }

@@ -1018,3 +1018,86 @@ fn surface_tests_one_partition_and_health_needs_a_drive() {
     );
     std::fs::remove_file(image).unwrap();
 }
+
+#[test]
+fn table_changes_are_shown_first_written_with_apply_and_undone() {
+    let image = disk_with_free_space("table.img");
+    let original = std::fs::read(&image).unwrap();
+    let backups = temp_folder("table-backups");
+    let (img, dir) = (image.to_str().unwrap(), backups.to_str().unwrap());
+    let name = image.file_name().unwrap().to_str().unwrap();
+
+    let out = datareco(&["table", img, "delete", "1", "--backup-dir", dir]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("Delete partition 1"), "{text}");
+    assert!(text.contains("Nothing was written"), "{text}");
+    assert_eq!(
+        std::fs::read(&image).unwrap(),
+        original,
+        "a preview writes nothing"
+    );
+
+    let out = datareco(&[
+        "table",
+        img,
+        "delete",
+        "1",
+        "--backup-dir",
+        dir,
+        "--apply",
+        "nope",
+    ]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("Type --apply"), "{}", stderr(&out));
+
+    let out = datareco(&[
+        "table",
+        img,
+        "delete",
+        "1",
+        "--backup-dir",
+        dir,
+        "--apply",
+        name,
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Written."), "{}", stdout(&out));
+    let listing = stdout(&datareco(&["partitions", img]));
+    assert!(
+        !listing.lines().any(|l| l.trim_start().starts_with("1 ")),
+        "{listing}"
+    );
+
+    let out = datareco(&[
+        "table",
+        img,
+        "create",
+        "--size",
+        "4MiB",
+        "--type",
+        "fat32",
+        "--backup-dir",
+        dir,
+        "--apply",
+        name,
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    for _ in 0..2 {
+        let out = datareco(&["table", img, "undo", "--backup-dir", dir, "--apply", name]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    assert_eq!(
+        std::fs::read(&image).unwrap(),
+        original,
+        "both changes undone"
+    );
+    let out = datareco(&["table", img, "undo", "--backup-dir", dir, "--apply", name]);
+    assert!(stderr(&out).contains("left to undo"), "{}", stderr(&out));
+
+    let out = datareco(&["table", "C:", "delete", "1"]);
+    assert!(stderr(&out).contains("belong to disks"), "{}", stderr(&out));
+    std::fs::remove_file(image).unwrap();
+    std::fs::remove_dir_all(backups).unwrap();
+}

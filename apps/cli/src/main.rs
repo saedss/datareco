@@ -8,6 +8,7 @@ mod partitions;
 mod raw;
 mod scan;
 mod structures;
+mod table;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -192,6 +193,21 @@ enum Command {
     Speed {
         /// A disk (disk0) or volume (C:).
         source: String,
+    },
+    /// Change a disk's partition table: create, delete, hide, convert MBR↔GPT,
+    /// restore a lost partition, undo. Shows the change first; writes only
+    /// with --apply and the disk's name, after backing up the old table.
+    Table {
+        /// A disk (disk1) or image file path.
+        source: String,
+        #[command(subcommand)]
+        action: table::TableAction,
+        /// Write the changes, typing the disk's name (disk1) or the image's file name.
+        #[arg(long, global = true)]
+        apply: Option<String>,
+        /// Where backups of old tables go (default: %LOCALAPPDATA%\DataReco\table-backups).
+        #[arg(long, global = true)]
+        backup_dir: Option<PathBuf>,
     },
     /// Search for lost partitions (after a wiped or damaged partition table).
     FindPartitions {
@@ -379,6 +395,17 @@ fn main() -> ExitCode {
         Command::Partitions { source } => partitions::show(&source),
         Command::FindPartitions { source, full } => partitions::find(&source, full),
         Command::Map { source } => health::map(&source),
+        Command::Table {
+            source,
+            action,
+            apply,
+            backup_dir,
+        } => table::table(table::TableRequest {
+            source: &source,
+            action,
+            apply: apply.as_deref(),
+            backup_dir: backup_dir.as_deref(),
+        }),
         Command::Health { source, json } => health::health(&source, json),
         Command::Surface { source, partition } => health::surface(&source, partition),
         Command::Speed { source } => health::speed(&source),

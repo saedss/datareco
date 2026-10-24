@@ -3,51 +3,114 @@ import {
   DiskHealth,
   DiskMap,
   HealthReport,
+  Operation,
   PartitionTable,
   Segment,
   SpeedStatus,
   SurfaceProgress,
+  TableView,
   api,
   driveLetter,
   toCommandError,
 } from "../api";
 import { formatNumber, formatSize } from "../format";
+import { ApplyBox, CreateForm, EditActions, EditForm, FieldForm, PendingChanges, UndoBox } from "./TableEditing";
 
 type Props = {
   sourceId: string;
+  /** The source's name for people ("Disk 1"). */
+  sourceName: string;
   sectorSize: number;
+  /** Partition table changes waiting for Apply (kept by the editor). */
+  ops: Operation[];
+  onOps: (ops: Operation[]) => void;
+  /** Called once a table change is written, so other views read it again. */
+  onTableChanged: () => void;
   /** Shows a byte offset of the source in the sector view. */
   onShowInSectors: (offset: number) => void;
 };
 
-/** The disk view: a map of the disk's partitions and free space, the drive's
- *  health, a surface test and a read speed test. Everything here only reads. */
-export function DiskView({ sourceId, sectorSize, onShowInSectors }: Props) {
-  const [map, setMap] = useState<DiskMap | null>(null);
+/** The disk view: a map of the disk's partitions and free space, changes to
+ *  its partition table (written only on Apply), the drive's health, a
+ *  surface test and a read speed test. */
+export function DiskView({ sourceId, sourceName, sectorSize, ops, onOps, onTableChanged, onShowInSectors }: Props) {
+  const [view, setView] = useState<TableView | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [form, setForm] = useState<EditForm | null>(null);
+  const [writing, setWriting] = useState(false);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const latest = useRef(0);
   const isImage = sourceId.startsWith("image:");
 
   const loadMap = useCallback(() => {
+    const request = ++latest.current;
     setMapError(null);
     api
-      .diskMap(sourceId)
-      .then(setMap)
-      .catch((e) => setMapError(toCommandError(e).message));
-  }, [sourceId]);
+      .planTable(sourceId, ops)
+      .then((v) => request === latest.current && setView(v))
+      .catch((e) => request === latest.current && setMapError(toCommandError(e).message));
+  }, [sourceId, ops]);
 
   useEffect(() => {
     loadMap();
-  }, [loadMap]);
+  }, [loadMap, version]);
 
-  const segment = map && selected !== null ? (map.segments[selected] ?? null) : null;
+  const map: DiskMap | null = view?.map ?? null;
+  const keyOf = (s: Segment) => `${s.kind}:${s.startLba}`;
+  const selected = map && selectedKey ? map.segments.findIndex((s) => keyOf(s) === selectedKey) : -1;
+  const segment = map && selected >= 0 ? map.segments[selected] : null;
+  const select = (index: number) => {
+    const s = map?.segments[index];
+    setSelectedKey(s ? keyOf(s) : null);
+  };
+  const addOp = (op: Operation) => {
+    setNotice(null);
+    onOps([...ops, op]);
+  };
+  const canEdit = !!view && !view.notEditable && !view.plan.blocked && !writing;
+
+  async function apply(confirmation: string) {
+    setWriting(true);
+    setWriteError(null);
+    try {
+      const { backup } = await api.applyTable(sourceId, ops, confirmation);
+      setForm(null);
+      setNotice(`Written. The old table is saved in ${backup}; "Undo a change" puts it back.`);
+      onOps([]);
+      onTableChanged();
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setWriteError(toCommandError(e).message);
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  async function undo(backup: string, confirmation: string) {
+    setWriting(true);
+    setWriteError(null);
+    try {
+      await api.undoTable(sourceId, backup, confirmation);
+      setForm(null);
+      setNotice("The old table is back. (The one it replaced is saved too.)");
+      onTableChanged();
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setWriteError(toCommandError(e).message);
+    } finally {
+      setWriting(false);
+    }
+  }
 
   return (
     <div className="disk-view">
       <section className="disk-section">
         <div className="disk-section-head">
-          <h2>Disk map</h2>
-          <button onClick={loadMap}>Refresh</button>
+          <h2>{ops.length > 0 ? "Disk map, with the changes" : "Disk map"}</h2>
+          <button onClick={() => setVersion((v) => v + 1)}>Refresh</button>
         </div>
         {mapError && (
           <div className="banner error" role="alert">
@@ -55,12 +118,12 @@ export function DiskView({ sourceId, sectorSize, onShowInSectors }: Props) {
           </div>
         )}
         {!map && !mapError && <p className="muted small">Reading the partition table…</p>}
-        {map && (
+        {map && view && (
           <>
             <p className="muted small">{tableSummary(map.table)}</p>
-            <DiskBar map={map} sectorSize={sectorSize} selected={selected} onSelect={setSelected} />
-            <SegmentTable map={map} sectorSize={sectorSize} selected={selected} onSelect={setSelected} />
-            {segment && (
+            <DiskBar map={map} sectorSize={sectorSize} selected={selected} onSelect={select} />
+            <SegmentTable map={map} sectorSize={sectorSize} selected={selected} onSelect={select} />
+            {segment && ops.length === 0 && (
               <div className="button-row">
                 <button onClick={() => onShowInSectors(segment.startLba * sectorSize)}>Show in sectors</button>
               </div>
@@ -70,6 +133,71 @@ export function DiskView({ sourceId, sectorSize, onShowInSectors }: Props) {
                 {problem.message}
               </p>
             ))}
+            {notice && <p className="notice-line small">{notice}</p>}
+            {view.notEditable || view.plan.blocked ? (
+              <p className="muted small">Partition table changes: {view.notEditable ?? view.plan.blocked}</p>
+            ) : (
+              <EditActions
+                view={view}
+                segment={segment}
+                sectorSize={sectorSize}
+                disabled={!canEdit || form?.kind === "apply" || form?.kind === "undo"}
+                onOp={addOp}
+                onForm={(f) => {
+                  setWriteError(null);
+                  setForm(f);
+                }}
+              />
+            )}
+            {form?.kind === "create" && (
+              <CreateForm
+                view={view}
+                segment={form.segment}
+                sectorSize={sectorSize}
+                onOp={addOp}
+                onClose={() => setForm(null)}
+              />
+            )}
+            {(form?.kind === "type" || form?.kind === "name") && (
+              <FieldForm key={`${form.kind}-${form.startLba}`} form={form} view={view} onOp={addOp} onClose={() => setForm(null)} />
+            )}
+            {ops.length > 0 && (
+              <PendingChanges
+                view={view}
+                ops={ops}
+                disabled={writing || form?.kind === "apply"}
+                onRemove={(i) => onOps(ops.filter((_, j) => j !== i))}
+                onDiscard={() => {
+                  setForm(null);
+                  onOps([]);
+                }}
+                onApply={() => {
+                  setWriteError(null);
+                  setForm({ kind: "apply" });
+                }}
+              />
+            )}
+            {form?.kind === "apply" && (
+              <ApplyBox
+                view={view}
+                diskName={sourceName}
+                busy={writing}
+                error={writeError}
+                onApply={apply}
+                onCancel={() => setForm(null)}
+              />
+            )}
+            {form?.kind === "undo" && (
+              <UndoBox
+                sourceId={sourceId}
+                view={view}
+                diskName={sourceName}
+                busy={writing}
+                error={writeError}
+                onUndo={undo}
+                onCancel={() => setForm(null)}
+              />
+            )}
           </>
         )}
       </section>
@@ -79,7 +207,7 @@ export function DiskView({ sourceId, sectorSize, onShowInSectors }: Props) {
       <SurfaceSection
         sourceId={sourceId}
         sectorSize={sectorSize}
-        segment={segment?.kind === "partition" ? segment : null}
+        segment={segment?.kind === "partition" && ops.length === 0 ? segment : null}
         segmentName={segment && map ? segmentName(segment, map.table) : null}
         onShowInSectors={onShowInSectors}
       />

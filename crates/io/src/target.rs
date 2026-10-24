@@ -138,6 +138,15 @@ impl MemoryTarget {
         }
     }
 
+    /// A disk holding `data` (a whole number of sectors).
+    pub fn with_data(data: Vec<u8>, sector_size: u32) -> MemoryTarget {
+        MemoryTarget {
+            data,
+            sector_size,
+            fixed: true,
+        }
+    }
+
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -279,6 +288,17 @@ pub fn check_disk_target(
             human_size(disk.size - source.size)
         ));
     }
+    Ok(disk_check(number, name, disk, devices, warnings))
+}
+
+/// What a disk holds, for a check that passed.
+fn disk_check(
+    number: u32,
+    name: String,
+    disk: &crate::devices::PhysicalDiskInfo,
+    devices: &DeviceList,
+    warnings: Vec<String>,
+) -> DiskTargetCheck {
     let on_disk: Vec<_> = devices
         .volumes
         .iter()
@@ -297,7 +317,7 @@ pub fn check_disk_target(
             }
         })
         .collect();
-    Ok(DiskTargetCheck {
+    DiskTargetCheck {
         number,
         name,
         model: disk.model.clone(),
@@ -307,7 +327,28 @@ pub fn check_disk_target(
         warnings,
         confirmation: format!("disk{number}"),
         volume_paths: on_disk.iter().map(|v| v.path.clone()).collect(),
-    })
+    }
+}
+
+/// Checks that disk `number`'s partition table may be changed: it must
+/// exist and not be the disk Windows runs from (whose volumes can't be
+/// closed while it runs). Its volumes are closed while the table is
+/// written ([`DiskTarget::open`]), and Windows reads the new table after.
+pub fn check_disk_for_table_changes(number: u32, devices: &DeviceList) -> Result<DiskTargetCheck> {
+    let name = SourceSpec::PhysicalDisk(number).display_name();
+    let disk = devices
+        .disks
+        .iter()
+        .find(|d| d.number == number)
+        .ok_or_else(|| Error::NotFound { name: name.clone() })?;
+    if devices.system_disks().contains(&number) {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        return Err(Error::refused(format!(
+            "{name} holds Windows ({drive}). DataReco doesn't change the partition table of the \
+             disk this computer runs from."
+        )));
+    }
+    Ok(disk_check(number, name, disk, devices, Vec::new()))
 }
 
 /// Refuses a file (an image or map file) on the disk being copied from:
@@ -535,6 +576,23 @@ mod tests {
         let disk3 = SourceSpec::PhysicalDisk(3);
         let check = check_disk_target(1, &source(&disk3), &[], &devices).unwrap();
         assert_eq!(check.volumes, ["D:", "A 1.0 GiB volume"]);
+    }
+
+    #[test]
+    fn partition_tables_of_other_disks_may_change() {
+        let devices = computer();
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        if system.eq_ignore_ascii_case("C:") {
+            let reason = refusal(check_disk_for_table_changes(0, &devices));
+            assert!(reason.contains("holds Windows"), "{reason}");
+        }
+        let check = check_disk_for_table_changes(1, &devices).unwrap();
+        assert_eq!(check.confirmation, "disk1");
+        assert_eq!(check.volumes, ["D:", "A 1.0 GiB volume"]);
+        assert!(matches!(
+            check_disk_for_table_changes(9, &devices),
+            Err(Error::NotFound { .. })
+        ));
     }
 
     #[test]

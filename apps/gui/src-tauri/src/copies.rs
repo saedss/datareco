@@ -44,6 +44,16 @@ impl Copies {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// The sources being copied, and the disks being copied onto.
+    pub fn sources_in_use(&self) -> Vec<String> {
+        self.lock()
+            .iter()
+            .flat_map(|(id, session)| {
+                std::iter::once(id.clone()).chain(session.copier.map().target.clone())
+            })
+            .collect()
+    }
 }
 
 struct Session {

@@ -216,6 +216,59 @@ fn assert_found_the_three_volumes(found: &[crate::FoundPartition]) {
 }
 
 #[test]
+fn wiped_partitions_are_found_and_put_back() {
+    use crate::edit::{Operation, Style, plan, type_for_file_system};
+    let mut image = mbr_disk();
+    image.wipe(0);
+    let disk = image.disk();
+    let table = read_table(&disk).unwrap();
+    let found = Scan::run(&disk, ScanMode::Quick, Some(&table)).unwrap();
+    let mut ops = vec![Operation::Initialize { style: Style::Mbr }];
+    for f in found.iter().filter(|f| f.confidence >= Confidence::Medium) {
+        ops.push(Operation::Create {
+            start_lba: f.start_lba,
+            sectors: f.sectors,
+            type_code: type_for_file_system(f.file_system.as_ref().unwrap().kind).into(),
+            logical: false,
+            name: None,
+        });
+    }
+    let plan = plan(&disk, &ops).unwrap();
+    assert!(plan.is_ready(), "{plan:#?}");
+    for write in &plan.writes {
+        image.put(write.lba, &write.data);
+    }
+    let restored = read_table(&image.disk()).unwrap();
+    let summary: Vec<_> = restored
+        .partitions
+        .iter()
+        .map(|p| {
+            (
+                p.start_lba,
+                p.sectors,
+                p.file_system.as_ref().map(|f| f.kind),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (FAT_START, FAT_SECTORS, Some(FsKind::Fat32)),
+            (NTFS_START, NTFS_SECTORS, Some(FsKind::Ntfs)),
+            (LINUX_START, LINUX_SECTORS, Some(FsKind::Ext4)),
+        ]
+    );
+    assert!(
+        restored
+            .problems
+            .iter()
+            .all(|p| p.severity == Severity::Info),
+        "{:#?}",
+        restored.problems
+    );
+}
+
+#[test]
 fn finds_partitions_after_the_mbr_is_wiped() {
     let mut image = mbr_disk();
     image.wipe(0);

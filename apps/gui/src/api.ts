@@ -94,6 +94,8 @@ export type Partition = {
   name: string | null;
   guid: string | null;
   bootable: boolean;
+  /** Hidden from Windows (a hidden MBR type, or GPT's hidden attribute). */
+  hidden: boolean;
   fileSystem: FileSystemInfo | null;
 };
 
@@ -379,6 +381,75 @@ export type SpeedStatus = {
   stopped: string | null;
 };
 
+// ---------------------------------------------------------------- partition table changes
+
+export type TableStyle = "mbr" | "gpt";
+
+/** One change to a partition table (see Operation in crates/partitions/src/edit). Partitions
+ *  are named by their first sector. */
+export type Operation =
+  | { op: "initialize"; style: TableStyle }
+  | { op: "create"; startLba: number; sectors: number; typeCode: string; logical: boolean; name: string | null }
+  | { op: "delete"; startLba: number }
+  | { op: "setActive"; startLba: number; active: boolean }
+  | { op: "setHidden"; startLba: number; hidden: boolean }
+  | { op: "setType"; startLba: number; typeCode: string }
+  | { op: "setName"; startLba: number; name: string }
+  | { op: "convert"; style: TableStyle }
+  | { op: "makeLogical"; startLba: number }
+  | { op: "makePrimary"; startLba: number };
+
+export type PlanStep = { description: string; warnings: string[] };
+
+export type TablePlan = {
+  /** Why the table can't be changed at all. */
+  blocked: string | null;
+  styleBefore: TableStyle | null;
+  style: TableStyle | null;
+  /** One per operation done. */
+  steps: PlanStep[];
+  /** The first operation that can't be done; later ones aren't tried. */
+  error: { step: number; message: string } | null;
+  sectorsWritten: number;
+};
+
+export type TypeChoice = { code: string; name: string };
+
+export type BackupInfo = {
+  path: string;
+  source: string;
+  disk: string;
+  /** Milliseconds since 1970. */
+  created: number;
+  changes: string[];
+  /** For an undo: the backup file it undid. */
+  undoes: string | null;
+  /** A later undo put this change back. */
+  undone: boolean;
+};
+
+export type TableView = {
+  plan: TablePlan;
+  /** The map after the pending changes (as it is, with none). */
+  map: DiskMap;
+  /** What to type to write changes, or why they can't be written. */
+  confirmation: string | null;
+  notEditable: string | null;
+  /** Volumes closed while the table is written. */
+  volumes: string[];
+  typesMbr: TypeChoice[];
+  typesGpt: TypeChoice[];
+  backups: BackupInfo[];
+};
+
+export type UndoView = {
+  backup: string;
+  changes: string[];
+  created: number;
+  map: DiskMap | null;
+  refusal: string | null;
+};
+
 export type CommandError = {
   kind:
     | "access_denied"
@@ -564,6 +635,15 @@ export const api = {
   startSpeedTest: (id: string) => invoke<SpeedStatus>("start_speed_test", { id }),
   continueSpeedTest: (id: string) => invoke<SpeedStatus>("continue_speed_test", { id }),
   stopSpeedTest: (id: string) => invoke<void>("stop_speed_test", { id }),
+
+  /** The table as it would be after `ops`, without writing. */
+  planTable: (id: string, ops: Operation[]) => invoke<TableView>("plan_table", { id, ops }),
+  /** Writes `ops` once `confirmation` is the disk's name; returns the backup of the old table. */
+  applyTable: (id: string, ops: Operation[], confirmation: string) =>
+    invoke<{ backup: string }>("apply_table", { id, ops, confirmation }),
+  previewUndo: (id: string, backup: string) => invoke<UndoView>("preview_undo", { id, backup }),
+  undoTable: (id: string, backup: string, confirmation: string) =>
+    invoke<{ backup: string }>("undo_table", { id, backup, confirmation }),
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

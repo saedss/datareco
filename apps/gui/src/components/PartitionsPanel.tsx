@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileSystemInfo, PartitionTable, ScanMode, SearchStatus, api, toCommandError } from "../api";
+import { FileSystemInfo, FoundPartition, Operation, PartitionTable, ScanMode, SearchStatus, api, toCommandError } from "../api";
 import { formatNumber, formatSize } from "../format";
 
 type Props = {
@@ -7,10 +7,13 @@ type Props = {
   sectorSize: number;
   /** Shows the first sector of a partition. */
   onJump: (offset: number) => void;
+  /** Adds putting a found partition back in the table to the Disk view's
+   *  pending changes; `needsTable` when the disk has none to add it to. */
+  onRestore: (op: Operation, needsTable: boolean) => void;
 };
 
 /** The partition table, its problems, and the search for lost partitions. */
-export function PartitionsPanel({ sourceId, sectorSize, onJump }: Props) {
+export function PartitionsPanel({ sourceId, sectorSize, onJump, onRestore }: Props) {
   const [table, setTable] = useState<PartitionTable | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<SearchStatus | null>(null);
@@ -136,12 +139,37 @@ export function PartitionsPanel({ sourceId, sectorSize, onJump }: Props) {
                   ))}
                 </ul>
               </button>
+              {!f.inTable && (
+                <button
+                  className="link-button restore-button"
+                  title="Adds it to the pending changes in the Disk view; nothing is written until you apply them"
+                  onClick={() => onRestore(restoreOp(f), table?.kind === "none")}
+                >
+                  Put it back in the partition table…
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
     </div>
   );
+}
+
+/** Creating a partition where a found one is, typed for its file system. */
+function restoreOp(found: FoundPartition): Operation {
+  const kind = found.fileSystem?.kind;
+  const typeCode =
+    kind === "fat32"
+      ? "fat32"
+      : kind === "fat16" || kind === "fat12"
+        ? "fat16"
+        : kind === "ext2" || kind === "ext3" || kind === "ext4" || kind === "btrfs"
+          ? "linux"
+          : kind === "hfsplus" || kind === "apfs"
+            ? kind
+            : "ntfs";
+  return { op: "create", startLba: found.startLba, sectors: found.sectors, typeCode, logical: false, name: null };
 }
 
 function tableSummary(table: PartitionTable): string {
