@@ -1,5 +1,6 @@
-//! `format`, `wipe`, `label` and `letter`. Formatting and wiping show what
-//! they'd do and only write with `--apply` and the disk's name.
+//! `format`, `wipe`, `label` and `letter`. Formatting, wiping and changing a
+//! drive letter show what they'd do and only do it with `--apply` and the
+//! disk's (or volume's) name.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -365,7 +366,26 @@ pub fn label(source: &str, partition: Option<u32>, label: Option<&str>) -> Resul
     Ok(())
 }
 
-pub fn letter(source: &str, partition: Option<u32>, letter: &str) -> Result<(), CliError> {
+/// The same volume named twice: `E:`, `e`, `E:\` all match.
+fn same_name(a: &str, b: &str) -> bool {
+    let plain = |s: &str| {
+        s.trim()
+            .trim_end_matches('\\')
+            .trim_end_matches(':')
+            .to_ascii_lowercase()
+    };
+    plain(a) == plain(b)
+}
+
+/// Changes a volume's drive letter. Shows the change first; changes it only
+/// with `--apply` and the volume named again, since programs that use the old
+/// letter stop finding it.
+pub fn letter(
+    source: &str,
+    partition: Option<u32>,
+    letter: &str,
+    apply: Option<&str>,
+) -> Result<(), CliError> {
     let devices = list_devices()?;
     let volume = volume(&SourceSpec::parse(source), partition, &devices)?;
     let wanted = match letter
@@ -382,6 +402,40 @@ pub fn letter(source: &str, partition: Option<u32>, letter: &str) -> Result<(), 
             )));
         }
     };
+    let was = volume
+        .mount_points
+        .iter()
+        .find(|m| m.len() == 3 && m.ends_with(":\\"))
+        .map(|m| m[..2].to_ascii_uppercase());
+    let wanted_name = wanted.map(|l| format!("{}:", l.to_ascii_uppercase()));
+    if was == wanted_name {
+        println!(
+            "Nothing to change: it's {} already.",
+            was.as_deref().unwrap_or("without a letter")
+        );
+        return Ok(());
+    }
+    let Some(typed) = apply else {
+        match (&was, &wanted_name) {
+            (Some(old), Some(new)) => println!(
+                "{old} would become {new}. Programs, shortcuts and settings that use {old}\\ won't \
+                 find it there any more. Nothing on it is deleted."
+            ),
+            (Some(old), None) => println!(
+                "{old} would lose its drive letter: it won't show in File Explorer, and programs \
+                 can't open it, until it gets one again. Nothing on it is deleted."
+            ),
+            (None, Some(new)) => println!("It would get {new}. Nothing on it changes."),
+            (None, None) => {}
+        }
+        println!("To go ahead, run the same command with --apply {source}.");
+        return Ok(());
+    };
+    if !same_name(typed, source) {
+        return Err(CliError::Message(format!(
+            "--apply must name the volume again: --apply {source}."
+        )));
+    }
     set_drive_letter(&volume.path, &volume.mount_points, wanted)?;
     match wanted {
         Some(l) => println!("It's {}: now.", l.to_ascii_uppercase()),
@@ -401,5 +455,14 @@ mod tests {
         assert_eq!(parse_cluster("1M").unwrap(), 1 << 20);
         assert_eq!(parse_cluster("4096").unwrap(), 4096);
         assert!(parse_cluster("big").is_err());
+    }
+
+    #[test]
+    fn volume_names_match_however_written() {
+        assert!(same_name("E:", "e"));
+        assert!(same_name("e:\\", "E:"));
+        assert!(same_name(" disk1 ", "DISK1"));
+        assert!(!same_name("E:", "F:"));
+        assert!(!same_name("disk1", "disk2"));
     }
 }

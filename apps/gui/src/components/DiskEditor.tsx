@@ -27,6 +27,8 @@ type Props = {
   onRestartAsAdmin: () => void;
   /** Opens an image file (a finished copy) in the editor. */
   onOpenImage: (path: string) => void;
+  /** How many partition table changes wait for Apply, so closing can ask first. */
+  onPending: (count: number) => void;
 };
 
 /** A disk's (or image's) workspace: its tabs, Overview to Hex editor. */
@@ -40,6 +42,7 @@ export function DiskEditor({
   onReloadTemplates,
   onRestartAsAdmin,
   onOpenImage,
+  onPending,
 }: Props) {
   const [info, setInfo] = useState<SourceInfo | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
@@ -64,6 +67,8 @@ export function DiskEditor({
   const [backup, setBackup] = useState<{ task: BackupTask; startLba?: number; nonce: number } | null>(null);
   const latestRead = useRef(0);
   const root = useRef<HTMLElement>(null);
+
+  useEffect(() => onPending(ops.length), [ops.length, onPending]);
 
   const showView = useCallback((next: View) => {
     setView(next);
