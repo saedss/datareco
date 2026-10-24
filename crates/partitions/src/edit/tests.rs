@@ -1,0 +1,746 @@
+//! Changing tables on disks built in memory, read back with the same
+//! reader the rest of DataReco uses.
+
+use std::sync::Arc;
+
+use datareco_io::{Disk, MemorySource, MemoryTarget};
+
+use super::*;
+use crate::{PartitionKind, PartitionTable, SegmentKind, Severity, TableKind, layout, read_table};
+
+const MIB: u64 = 2048;
+
+struct Image {
+    data: Vec<u8>,
+    sector_size: u32,
+}
+
+impl Image {
+    fn new(sectors: u64) -> Image {
+        Image::with_sectors(sectors, 512)
+    }
+
+    fn with_sectors(sectors: u64, sector_size: u32) -> Image {
+        Image {
+            data: vec![0; usize::try_from(sectors * u64::from(sector_size)).unwrap()],
+            sector_size,
+        }
+    }
+
+    fn disk(&self) -> Disk {
+        Disk::new(
+            "Test disk",
+            Box::new(MemorySource::new(self.data.clone(), self.sector_size)),
+        )
+    }
+
+    fn plan(&self, ops: &[Operation]) -> Plan {
+        plan(&self.disk(), ops).unwrap()
+    }
+
+    /// Plans `ops`, which must all work, and writes them.
+    fn run(&mut self, ops: &[Operation]) -> Plan {
+        let plan = self.plan(ops);
+        assert_eq!(plan.blocked, None);
+        assert_eq!(plan.error, None);
+        self.write(&plan.writes);
+        plan
+    }
+
+    fn write(&mut self, writes: &[SectorWrite]) {
+        for w in writes {
+            let at = usize::try_from(w.lba * u64::from(self.sector_size)).unwrap();
+            self.data[at..at + w.data.len()].copy_from_slice(&w.data);
+        }
+    }
+
+    /// The table, which must have no errors or warnings.
+    fn table(&self) -> PartitionTable {
+        let table = read_table(&self.disk()).unwrap();
+        let serious: Vec<_> = table
+            .problems
+            .iter()
+            .filter(|p| p.severity >= Severity::Warning)
+            .collect();
+        assert!(serious.is_empty(), "{serious:#?}");
+        table
+    }
+
+    fn sector(&self, lba: u64) -> &[u8] {
+        let at = usize::try_from(lba * u64::from(self.sector_size)).unwrap();
+        &self.data[at..at + self.sector_size as usize]
+    }
+}
+
+fn create(start: u64, sectors: u64, kind: &str) -> Operation {
+    Operation::Create {
+        start_lba: start,
+        sectors,
+        type_code: kind.into(),
+        logical: false,
+        name: None,
+    }
+}
+
+fn logical(start: u64, sectors: u64, kind: &str) -> Operation {
+    Operation::Create {
+        start_lba: start,
+        sectors,
+        type_code: kind.into(),
+        logical: true,
+        name: None,
+    }
+}
+
+/// (number, kind, start, sectors, type code) of each partition.
+fn shape(table: &PartitionTable) -> Vec<(u32, PartitionKind, u64, u64, String)> {
+    table
+        .partitions
+        .iter()
+        .map(|p| {
+            (
+                p.number,
+                p.kind,
+                p.start_lba,
+                p.sectors,
+                p.type_code.clone(),
+            )
+        })
+        .collect()
+}
+
+/// A 64 MiB MBR disk: NTFS primary (1–17 MiB), then an extended partition
+/// with Linux (18–34 MiB) and FAT32 (35–43 MiB) logical partitions.
+fn mbr_disk() -> Image {
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Mbr },
+        create(MIB, 16 * MIB, "ntfs"),
+        logical(18 * MIB, 16 * MIB, "linux"),
+        logical(35 * MIB, 8 * MIB, "fat32"),
+    ]);
+    image
+}
+
+use PartitionKind::{Extended as Ext, Gpt as G, Logical as L, Primary as P};
+
+#[test]
+fn builds_an_mbr_disk_with_logical_partitions() {
+    let image = mbr_disk();
+    let table = image.table();
+    assert_eq!(table.kind, TableKind::Mbr);
+    assert_eq!(
+        shape(&table),
+        [
+            (1, P, MIB, 16 * MIB, "0x07".into()),
+            (2, Ext, 17 * MIB, 47 * MIB, "0x0F".into()),
+            (5, L, 18 * MIB, 16 * MIB, "0x83".into()),
+            (6, L, 35 * MIB, 8 * MIB, "0x0C".into()),
+        ]
+    );
+    // The second logical partition's boot record sits right after the first.
+    assert_eq!(&image.sector(34 * MIB)[510..], [0x55, 0xAA]);
+    let free: Vec<_> = layout(&table)
+        .iter()
+        .filter(|s| s.kind == SegmentKind::Free)
+        .map(|s| (s.start_lba, s.end_lba(), s.logical))
+        .collect();
+    assert_eq!(free, [(43 * MIB, 64 * MIB, true)]);
+}
+
+#[test]
+fn deleting_logical_partitions_keeps_the_chain_whole() {
+    let mut image = mbr_disk();
+    let plan = image.run(&[Operation::Delete {
+        start_lba: 18 * MIB,
+    }]);
+    assert!(
+        plan.steps[0]
+            .description
+            .starts_with("Delete partition 5 (Linux"),
+        "{:?}",
+        plan.steps
+    );
+    assert_eq!(
+        shape(&image.table())[2..],
+        [(5, L, 35 * MIB, 8 * MIB, "0x0C".into())],
+        "the FAT32 one is number 5 now"
+    );
+    let plan = image.run(&[Operation::Delete {
+        start_lba: 35 * MIB,
+    }]);
+    assert!(
+        plan.steps[0]
+            .description
+            .contains("extended partition that held it")
+    );
+    assert_eq!(
+        shape(&image.table()),
+        [(1, P, MIB, 16 * MIB, "0x07".into())]
+    );
+}
+
+#[test]
+fn builds_a_gpt_disk() {
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Gpt },
+        Operation::Create {
+            start_lba: MIB,
+            sectors: 8 * MIB,
+            type_code: "efi".into(),
+            logical: false,
+            name: Some("EFI system partition".into()),
+        },
+        create(9 * MIB, 32 * MIB, "ntfs"),
+    ]);
+    let table = image.table();
+    assert_eq!(table.kind, TableKind::Gpt);
+    assert_eq!(shape(&table)[0].1, G);
+    let names: Vec<_> = table
+        .partitions
+        .iter()
+        .map(|p| p.name.clone().unwrap())
+        .collect();
+    assert_eq!(names, ["EFI system partition", "Basic data partition"]);
+    assert_eq!(table.partitions[1].type_name, "Microsoft basic data");
+    assert_ne!(table.partitions[0].guid, table.partitions[1].guid);
+    // Both headers are valid: wiping the primary one changes nothing.
+    image.data[512..1024].fill(0);
+    let table = read_table(&image.disk()).unwrap();
+    assert_eq!(table.partitions.len(), 2);
+}
+
+#[test]
+fn gpt_on_4096_byte_sectors() {
+    let mut image = Image::with_sectors(16_384, 4096); // 64 MiB
+    image.run(&[
+        Operation::Initialize { style: Style::Gpt },
+        create(256, 4096, "linux"),
+    ]);
+    let table = image.table();
+    assert_eq!(
+        table.usable.unwrap().first,
+        6,
+        "the 16 KiB array is 4 sectors"
+    );
+    assert_eq!(
+        shape(&table),
+        [(
+            1,
+            G,
+            256,
+            4096,
+            "0FC63DAF-8483-4772-8E79-3D69D8477DE4".into()
+        )]
+    );
+}
+
+#[test]
+fn converts_between_mbr_and_gpt_keeping_partitions() {
+    let mut image = mbr_disk();
+    let plan = image.run(&[Operation::Convert { style: Style::Gpt }]);
+    assert!(plan.steps[0].warnings.iter().any(|w| w.contains("BIOS")));
+    let table = image.table();
+    assert_eq!(table.kind, TableKind::Gpt);
+    let places: Vec<_> = table
+        .partitions
+        .iter()
+        .map(|p| (p.start_lba, p.sectors))
+        .collect();
+    assert_eq!(
+        places,
+        [(MIB, 16 * MIB), (18 * MIB, 16 * MIB), (35 * MIB, 8 * MIB)]
+    );
+    assert_eq!(table.partitions[1].type_name, "Linux file system");
+
+    image.run(&[Operation::Convert { style: Style::Mbr }]);
+    let table = image.table();
+    assert_eq!(table.kind, TableKind::Mbr);
+    assert_eq!(
+        shape(&table),
+        [
+            (1, P, MIB, 16 * MIB, "0x07".into()),
+            (2, P, 18 * MIB, 16 * MIB, "0x83".into()),
+            (3, P, 35 * MIB, 8 * MIB, "0x07".into()),
+        ],
+        "basic data with no file system found becomes 0x07"
+    );
+    assert!(
+        image.sector(1).iter().all(|&b| b == 0),
+        "the old GPT header is cleared"
+    );
+    assert!(image.sector(64 * MIB - 1).iter().all(|&b| b == 0));
+}
+
+#[test]
+fn converting_to_gpt_needs_room_at_both_ends() {
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Mbr },
+        create(MIB, 63 * MIB, "ntfs"),
+    ]);
+    let plan = image.plan(&[Operation::Convert { style: Style::Gpt }]);
+    assert!(plan.error.unwrap().message.contains("Shrink it by 1 MiB"));
+}
+
+#[test]
+fn initializing_never_writes_over_data() {
+    let mut image = Image::new(64 * MIB);
+    image.data[5 * 512] = 1; // something in the GPT area
+    let plan = image.plan(&[Operation::Initialize { style: Style::Gpt }]);
+    assert!(
+        plan.error
+            .unwrap()
+            .message
+            .contains("Sectors 1–33 hold data")
+    );
+    image.run(&[Operation::Initialize { style: Style::Mbr }]);
+    assert_eq!(
+        image.table().kind,
+        TableKind::Mbr,
+        "an empty MBR reads as one"
+    );
+
+    let mut image = Image::new(64 * MIB);
+    image.data[446] = 0x80;
+    let plan = image.plan(&[Operation::Initialize { style: Style::Mbr }]);
+    assert!(plan.error.unwrap().message.contains("Sector 0 hold data"));
+
+    let image = mbr_disk();
+    let plan = image.plan(&[Operation::Initialize { style: Style::Gpt }]);
+    assert!(plan.error.unwrap().message.contains("already has"));
+}
+
+#[test]
+fn mistakes_are_explained_and_stop_the_list() {
+    let image = mbr_disk();
+    let cases: Vec<(Operation, &str)> = vec![
+        (create(10 * MIB, MIB, "ntfs"), "overlaps partition 1"),
+        (
+            create(50 * MIB, MIB, "ntfs"),
+            "inside the extended partition",
+        ),
+        (
+            logical(MIB, MIB, "ntfs"),
+            "go inside the extended partition",
+        ),
+        (create(60 * MIB, 8 * MIB, "ntfs"), "past the end"),
+        (
+            Operation::SetName {
+                start_lba: MIB,
+                name: "x".into(),
+            },
+            "Only GPT",
+        ),
+        (
+            Operation::Delete { start_lba: 3 },
+            "no partition starting at sector 3",
+        ),
+        (
+            Operation::SetActive {
+                start_lba: 18 * MIB,
+                active: true,
+            },
+            "Only primary",
+        ),
+        (
+            Operation::SetHidden {
+                start_lba: 18 * MIB,
+                hidden: true,
+            },
+            "Only FAT and NTFS",
+        ),
+        (
+            Operation::SetType {
+                start_lba: MIB,
+                type_code: "msr".into(),
+            },
+            "GPT",
+        ),
+        (Operation::Convert { style: Style::Mbr }, "already MBR"),
+    ];
+    for (op, expected) in cases {
+        let plan = image.plan(&[
+            Operation::SetActive {
+                start_lba: MIB,
+                active: true,
+            },
+            op.clone(),
+        ]);
+        let error = plan.error.unwrap_or_else(|| panic!("{op:?} should fail"));
+        assert_eq!(error.step, 1);
+        assert!(
+            error.message.contains(expected),
+            "{op:?}: {}",
+            error.message
+        );
+        assert_eq!(plan.steps.len(), 1, "the steps before still count");
+    }
+    // A fifth primary partition.
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Mbr },
+        create(MIB, MIB, "ntfs"),
+        create(3 * MIB, MIB, "ntfs"),
+        create(5 * MIB, MIB, "ntfs"),
+        create(7 * MIB, MIB, "ntfs"),
+    ]);
+    let plan = image.plan(&[create(9 * MIB, MIB, "ntfs")]);
+    assert!(plan.error.unwrap().message.contains("at most four"));
+    let plan = image.plan(&[logical(10 * MIB, MIB, "ntfs")]);
+    assert!(
+        plan.error
+            .unwrap()
+            .message
+            .contains("no room for an extended")
+    );
+}
+
+#[test]
+fn flags_types_and_names() {
+    let mut image = mbr_disk();
+    image.run(&[
+        Operation::SetActive {
+            start_lba: MIB,
+            active: true,
+        },
+        Operation::SetHidden {
+            start_lba: 35 * MIB,
+            hidden: true,
+        },
+        Operation::SetType {
+            start_lba: 18 * MIB,
+            type_code: "linux-swap".into(),
+        },
+    ]);
+    let table = image.table();
+    assert!(table.partitions[0].bootable);
+    assert_eq!(table.partitions[2].type_code, "0x82");
+    assert_eq!(table.partitions[3].type_code, "0x1C", "hidden FAT32");
+    image.run(&[Operation::SetHidden {
+        start_lba: 35 * MIB,
+        hidden: false,
+    }]);
+    assert_eq!(image.table().partitions[3].type_code, "0x0C");
+
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Gpt },
+        create(MIB, 8 * MIB, "ntfs"),
+    ]);
+    image.run(&[
+        Operation::SetName {
+            start_lba: MIB,
+            name: "Photos".into(),
+        },
+        Operation::SetActive {
+            start_lba: MIB,
+            active: true,
+        },
+    ]);
+    let table = image.table();
+    assert_eq!(table.partitions[0].name.as_deref(), Some("Photos"));
+    assert!(table.partitions[0].bootable);
+    let long = "x".repeat(37);
+    let plan = image.plan(&[Operation::SetName {
+        start_lba: MIB,
+        name: long,
+    }]);
+    assert!(plan.error.unwrap().message.contains("36"));
+}
+
+#[test]
+fn primary_and_logical_swap() {
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Mbr },
+        create(MIB, 8 * MIB, "ntfs"),
+        create(10 * MIB, 8 * MIB, "ntfs"),
+        create(20 * MIB, 8 * MIB, "linux"),
+    ]);
+    image.run(&[Operation::MakeLogical {
+        start_lba: 20 * MIB,
+    }]);
+    let table = image.table();
+    assert_eq!(table.partitions[2].kind, Ext);
+    assert_eq!(
+        (table.partitions[3].kind, table.partitions[3].start_lba),
+        (L, 20 * MIB)
+    );
+    // The one before it joins the extended partition too.
+    image.run(&[Operation::MakeLogical {
+        start_lba: 10 * MIB,
+    }]);
+    let kinds: Vec<_> = image
+        .table()
+        .partitions
+        .iter()
+        .map(|p| (p.kind, p.start_lba))
+        .collect();
+    assert_eq!(
+        kinds,
+        [(P, MIB), (Ext, 9 * MIB), (L, 10 * MIB), (L, 20 * MIB)]
+    );
+    // The first one back out, then the last.
+    image.run(&[Operation::MakePrimary {
+        start_lba: 10 * MIB,
+    }]);
+    image.run(&[Operation::MakePrimary {
+        start_lba: 20 * MIB,
+    }]);
+    let kinds: Vec<_> = image
+        .table()
+        .partitions
+        .iter()
+        .map(|p| (p.kind, p.start_lba))
+        .collect();
+    assert_eq!(kinds.iter().filter(|k| k.0 == P).count(), 3);
+    assert!(kinds.iter().all(|k| k.0 != Ext && k.0 != L), "{kinds:?}");
+}
+
+#[test]
+fn preview_shows_the_result_and_writes_nothing() {
+    let image = mbr_disk();
+    let before = image.data.clone();
+    let disk = Arc::new(image.disk());
+    let plan = plan(&disk, &[Operation::Delete { start_lba: MIB }]).unwrap();
+    assert!(plan.is_ready());
+    assert_eq!(plan.sectors_written, 1, "only the MBR changes");
+    let after = preview(Arc::clone(&disk), &plan.writes);
+    let table = read_table(&after).unwrap();
+    assert_eq!(table.partitions.len(), 3);
+    assert!(table.partitions.iter().all(|p| p.start_lba != MIB));
+    assert_eq!(image.data, before);
+    let nothing = plan_for(&image, &[]);
+    assert!(!nothing.is_ready(), "nothing to write");
+}
+
+fn plan_for(image: &Image, ops: &[Operation]) -> Plan {
+    plan(&image.disk(), ops).unwrap()
+}
+
+#[test]
+fn applying_saves_a_backup_that_undoes_it() {
+    let image = mbr_disk();
+    let original = image.data.clone();
+    let dir = std::env::temp_dir().join(format!("datareco-backups-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let disk = image.disk();
+    let plan = plan(&disk, &[Operation::Convert { style: Style::Gpt }]).unwrap();
+    let mut target = MemoryTarget::with_data(original.clone(), 512);
+    let change = Change {
+        source: "image:test.img",
+        changes: &plan.descriptions(),
+        writes: &plan.writes,
+        undoes: None,
+    };
+    let path = apply_writes(&disk, &change, &mut target, &dir).unwrap();
+    let changed = Image {
+        data: target.data().to_vec(),
+        sector_size: 512,
+    };
+    assert_eq!(changed.table().kind, TableKind::Gpt);
+    assert!(
+        verify_writes(&changed.disk(), &plan.writes)
+            .unwrap()
+            .is_empty()
+    );
+
+    let listed = list_backups(&dir, "image:test.img");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].changes,
+        ["Convert the disk to GPT, keeping every partition"]
+    );
+    assert!(list_backups(&dir, "disk:9").is_empty());
+
+    let backup = read_backup(&path).unwrap();
+    assert_eq!(next_to_undo(&dir, "image:test.img").unwrap().path, path);
+    let undo = undo_writes(&changed.disk(), &backup).unwrap().unwrap();
+    let mut undone = MemoryTarget::with_data(changed.data.clone(), 512);
+    let change = Change {
+        source: "image:test.img",
+        changes: &["Undo: Convert the disk to GPT".to_owned()],
+        writes: &undo,
+        undoes: Some(&path),
+    };
+    apply_writes(&changed.disk(), &change, &mut undone, &dir).unwrap();
+    assert_eq!(undone.data(), &original[..], "every byte back");
+    // The undo is a change of its own, but not one `undo` picks: nothing is
+    // left to undo.
+    let listed = list_backups(&dir, "image:test.img");
+    assert_eq!(listed.len(), 2);
+    assert!(listed[0].undoes.is_some() && listed[1].undone);
+    assert_eq!(next_to_undo(&dir, "image:test.img"), None);
+
+    // Once the disk has changed again, undoing that backup is refused.
+    let mut later = Image {
+        data: target.data().to_vec(),
+        sector_size: 512,
+    };
+    later.run(&[Operation::Delete { start_lba: MIB }]);
+    let refused = undo_writes(&later.disk(), &backup).unwrap().unwrap_err();
+    assert!(refused.contains("has changed since"), "{refused}");
+    // And a disk of another size isn't the one backed up.
+    let other = Image::new(32 * MIB);
+    assert!(
+        undo_writes(&other.disk(), &backup)
+            .unwrap()
+            .unwrap_err()
+            .contains("different")
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn damaged_and_dynamic_tables_are_left_alone() {
+    let mut image = mbr_disk();
+    image.data[446 + 4] = 0x42; // dynamic disk
+    assert!(image.plan(&[]).blocked.unwrap().contains("dynamic"));
+
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Mbr },
+        create(MIB, 8 * MIB, "ntfs"),
+        create(20 * MIB, 8 * MIB, "ntfs"),
+    ]);
+    // Make the second overlap the first.
+    image.data[446 + 16 + 8..446 + 16 + 12]
+        .copy_from_slice(&u32::try_from(4 * MIB).unwrap().to_le_bytes());
+    let blocked = image.plan(&[]).blocked.unwrap();
+    assert!(blocked.contains("overlap"), "{blocked}");
+
+    let mut image = Image::new(64 * MIB);
+    image.run(&[
+        Operation::Initialize { style: Style::Gpt },
+        create(MIB, 8 * MIB, "ntfs"),
+    ]);
+    image.data[2 * 512 + 40] ^= 1; // the entries no longer match their checksum
+    image.data[usize::try_from(64 * MIB - 33).unwrap() * 512 + 40] ^= 1;
+    assert!(image.plan(&[]).blocked.unwrap().contains("checksum"));
+}
+
+#[test]
+fn whole_disk_volumes_are_not_initialized() {
+    let mut image = Image::new(64 * MIB);
+    image.data[..512].copy_from_slice(&crate::boot::samples::ntfs(64 * MIB - 1));
+    let plan = image.plan(&[Operation::Initialize { style: Style::Mbr }]);
+    assert!(plan.error.unwrap().message.contains("hide it"));
+}
+
+/// Random operations, many times over: each either fails with a reason, or
+/// leaves a table the reader accepts without complaint.
+#[test]
+fn random_operations_always_leave_valid_tables() {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move |n: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % n.max(1)
+    };
+    for round in 0..6 {
+        let mut image = Image::new(24 * MIB);
+        let style = if round % 2 == 0 {
+            Style::Mbr
+        } else {
+            Style::Gpt
+        };
+        image.run(&[Operation::Initialize { style }]);
+        let mut done = 0;
+        for _ in 0..80 {
+            let table = image.table();
+            let segments = layout(&table);
+            let starts: Vec<u64> = table
+                .partitions
+                .iter()
+                .filter(|p| p.kind != Ext)
+                .map(|p| p.start_lba)
+                .collect();
+            let pick = |n: u64, list: &[u64]| {
+                list.get(usize::try_from(n).unwrap() % list.len().max(1))
+                    .copied()
+            };
+            let op = match next(8) {
+                0..=2 => {
+                    let free: Vec<_> = segments
+                        .iter()
+                        .filter(|s| s.kind == SegmentKind::Free)
+                        .collect();
+                    let Some(segment) = free.get(usize::try_from(next(free.len() as u64)).unwrap())
+                    else {
+                        continue;
+                    };
+                    let start = (segment.start_lba + 1).next_multiple_of(MIB);
+                    let room = segment.end_lba().saturating_sub(start);
+                    if room < MIB {
+                        continue;
+                    }
+                    Operation::Create {
+                        start_lba: start,
+                        sectors: MIB + next(room - MIB + 1),
+                        type_code: ["ntfs", "linux", "fat32"][usize::try_from(next(3)).unwrap()]
+                            .into(),
+                        logical: segment.logical || next(3) == 0,
+                        name: None,
+                    }
+                }
+                3 => match pick(next(64), &starts) {
+                    Some(start_lba) => Operation::Delete { start_lba },
+                    None => continue,
+                },
+                4 => match pick(next(64), &starts) {
+                    Some(start_lba) => Operation::MakeLogical { start_lba },
+                    None => continue,
+                },
+                5 => match pick(next(64), &starts) {
+                    Some(start_lba) => Operation::MakePrimary { start_lba },
+                    None => continue,
+                },
+                6 => match pick(next(64), &starts) {
+                    Some(start_lba) => Operation::SetHidden {
+                        start_lba,
+                        hidden: next(2) == 0,
+                    },
+                    None => continue,
+                },
+                _ => Operation::Convert {
+                    style: if next(2) == 0 { Style::Mbr } else { Style::Gpt },
+                },
+            };
+            let plan = image.plan(std::slice::from_ref(&op));
+            if plan.error.is_some() {
+                continue;
+            }
+            image.write(&plan.writes);
+            let after = image.table(); // panics on any warning or error
+            let parts = after.partitions.iter().filter(|p| p.kind != Ext).count();
+            assert!(parts <= 128, "{op:?}");
+            done += 1;
+        }
+        assert!(done > 20, "round {round}: only {done} operations worked");
+    }
+}
+
+#[test]
+fn converting_warns_about_data_it_writes_over() {
+    let mut image = mbr_disk();
+    let last = usize::try_from(64 * MIB - 1).unwrap();
+    image.data[last * 512 + 7] = 0xA5; // RAID information, say
+    image.data[2 * 512] = 0xEB; // a boot loader's first sectors
+    let plan = image.plan(&[Operation::Convert { style: Style::Gpt }]);
+    let warnings = &plan.steps[0].warnings;
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Sectors 1–33 hold data")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("last 33 sectors hold data")),
+        "{warnings:?}"
+    );
+}

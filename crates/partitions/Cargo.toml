@@ -10,9 +10,8 @@ publish.workspace = true
 [dependencies]
 datareco-io.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

@@ -10,6 +10,7 @@ mod partitions;
 mod raw;
 mod scans;
 mod structures;
+mod tables;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -114,6 +115,17 @@ impl OpenSources {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Disk>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Forgets every opened source (and its cached sectors), after a
+    /// partition table changed. Each is opened again when next used.
+    fn clear(&self) {
+        self.lock().clear();
+    }
+
+    /// Forgets one source, so it's opened (and read) afresh when next used.
+    fn forget(&self, id: &str) {
+        self.lock().remove(&SourceSpec::parse(id).id());
     }
 }
 
@@ -265,6 +277,10 @@ fn main() {
             health::start_speed_test,
             health::continue_speed_test,
             health::stop_speed_test,
+            tables::plan_table,
+            tables::apply_table,
+            tables::preview_undo,
+            tables::undo_table,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataReco");

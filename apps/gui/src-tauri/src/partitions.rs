@@ -18,6 +18,18 @@ const SEARCH_STEP: u64 = 128 << 20;
 #[derive(Default)]
 pub struct Searches(Mutex<HashMap<String, Search>>);
 
+impl Searches {
+    /// The sources being searched.
+    pub fn sources_in_use(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+}
+
 pub struct Search {
     scan: Scan,
     table: PartitionTable,

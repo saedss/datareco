@@ -50,5 +50,5 @@ pub use source::{FileSource, MemorySource, SectorSource, is_device_gone};
 pub use spec::SourceSpec;
 pub use target::{
     CopySource, DiskTarget, DiskTargetCheck, ImageTarget, MemoryTarget, SectorTarget,
-    check_disk_target, check_outside_source,
+    check_disk_for_table_changes, check_disk_target, check_outside_source,
 };

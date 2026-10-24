@@ -672,6 +672,7 @@ dependencies = [
  "datareco-io",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -6,7 +6,7 @@ use datareco_io::{Disk, Result};
 use serde::Serialize;
 
 use crate::boot::{FileSystem, IDENTIFY_BYTES, identify, identify_bytes, identify_far};
-use crate::bytes::has;
+use crate::bytes::{has, u32_at};
 use crate::{gpt, mbr};
 
 /// Logical partitions after this many are not followed (a loop or garbage).
@@ -49,6 +49,8 @@ pub struct Partition {
     pub guid: Option<String>,
     /// Marked active (MBR) or legacy-BIOS-bootable (GPT).
     pub bootable: bool,
+    /// Hidden from Windows: a hidden type (MBR) or the hidden attribute (GPT).
+    pub hidden: bool,
     /// The file system found at the partition's start, if any.
     pub file_system: Option<FileSystem>,
 }
@@ -165,6 +167,13 @@ pub fn read_table(disk: &Disk) -> Result<PartitionTable> {
                 ),
             ));
             table.whole_disk = Some(fs);
+        } else if start.get(..512).is_some_and(mbr::is_empty_table) {
+            table.kind = TableKind::Mbr;
+            table.disk_id = Some(format!("{:08X}", u32_at(&start, 440).unwrap_or(0)));
+            table.problems.push(problem(
+                Severity::Info,
+                "The MBR partition table is empty. If partitions were here, search for lost                  partitions to find them.",
+            ));
         } else if start.iter().take(512).all(|&b| b == 0) {
             table.problems.push(problem(
                 Severity::Info,
@@ -189,14 +198,14 @@ pub fn read_table(disk: &Disk) -> Result<PartitionTable> {
     Ok(table)
 }
 
-fn read(disk: &Disk, offset: u64, len: u64) -> Result<Vec<u8>> {
+pub(crate) fn read(disk: &Disk, offset: u64, len: u64) -> Result<Vec<u8>> {
     let len = len.min(disk.size().saturating_sub(offset));
     let mut data = vec![0; usize::try_from(len).unwrap_or(0)];
     disk.read_at(offset, &mut data)?;
     Ok(data)
 }
 
-fn read_header(disk: &Disk, lba: u64) -> Result<Option<gpt::Header>> {
+pub(crate) fn read_header(disk: &Disk, lba: u64) -> Result<Option<gpt::Header>> {
     if lba >= disk.sector_count() {
         return Ok(None);
     }
@@ -276,6 +285,7 @@ fn gpt_partition(entry: &gpt::Entry) -> Partition {
         name: entry.name.clone(),
         guid: Some(gpt::guid(&entry.unique_guid)),
         bootable: entry.attributes & 0x4 != 0,
+        hidden: entry.attributes & (1 << 62) != 0,
         file_system: None,
     }
 }
@@ -291,6 +301,10 @@ fn mbr_partition(number: u32, kind: PartitionKind, entry: &mbr::Entry, start: u6
         name: None,
         guid: None,
         bootable: entry.status == 0x80,
+        hidden: matches!(
+            entry.type_code,
+            0x11 | 0x14 | 0x16 | 0x17 | 0x1B | 0x1C | 0x1E
+        ),
         file_system: None,
     }
 }

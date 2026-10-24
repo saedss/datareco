@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { ByteData, CommandError, RawStatus, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
+import { ByteData, CommandError, Operation, RawStatus, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
 import { CopyView } from "./CopyView";
@@ -52,6 +52,10 @@ export function DiskEditor({
   const [scanOpened, setScanOpened] = useState(false);
   const [copyOpened, setCopyOpened] = useState(false);
   const [diskOpened, setDiskOpened] = useState(false);
+  // Partition table changes waiting for Apply, and a count of the changes
+  // written, so views that read the table read it again.
+  const [ops, setOps] = useState<Operation[]>([]);
+  const [tableVersion, setTableVersion] = useState(0);
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [raw, setRaw] = useState<RawStatus | null>(null);
   const [browse, setBrowse] = useState<{ key: string; nonce: number } | null>(null);
@@ -84,7 +88,7 @@ export function DiskEditor({
         setError(null);
       })
       .catch((e) => request === latestRead.current && setError(toCommandError(e)));
-  }, [info, topRow, rows]);
+  }, [info, topRow, rows, tableVersion]);
 
   const size = info?.size ?? 0;
   const maxTop = Math.max(0, Math.ceil(size / BYTES_PER_ROW) - rows);
@@ -117,7 +121,7 @@ export function DiskEditor({
   if (error?.kind === "access_denied") {
     return (
       <section className="editor">
-        <EditorHeader title={title} subtitle={subtitle} info={info} view={null} onView={showView} />
+        <EditorHeader title={title} subtitle={subtitle} info={info} view={null} onView={showView} pending={0} />
         <AdminNeeded onRestart={onRestartAsAdmin} />
       </section>
     );
@@ -125,7 +129,7 @@ export function DiskEditor({
 
   return (
     <section className="editor">
-      <EditorHeader title={title} subtitle={subtitle} info={info} view={info ? view : null} onView={showView} />
+      <EditorHeader title={title} subtitle={subtitle} info={info} view={info ? view : null} onView={showView} pending={ops.length} />
       {error && (
         <div className="banner error" role="alert">
           {error.message}
@@ -184,9 +188,18 @@ export function DiskEditor({
                 </div>
                 <div className="panel-body" hidden={tab !== "partitions"}>
                   <PartitionsPanel
+                    key={tableVersion}
                     sourceId={info.id}
                     sectorSize={info.sectorSize}
                     onJump={(offset) => reveal(offset, { start: offset, length: info.sectorSize })}
+                    onRestore={(op, needsTable) => {
+                      setOps((current) => {
+                        const initialized = current.some((o) => o.op === "initialize");
+                        const init: Operation[] = needsTable && !initialized ? [{ op: "initialize", style: "mbr" }] : [];
+                        return [...current, ...init, op];
+                      });
+                      showView("disk");
+                    }}
                   />
                 </div>
                 <div className="panel-body" hidden={tab !== "bookmarks"}>
@@ -205,7 +218,11 @@ export function DiskEditor({
             <div className="view-pane" hidden={view !== "disk"}>
               <DiskView
                 sourceId={info.id}
+                sourceName={info.name}
                 sectorSize={info.sectorSize}
+                ops={ops}
+                onOps={setOps}
+                onTableChanged={() => setTableVersion((v) => v + 1)}
                 onShowInSectors={(offset) => {
                   setView("sectors");
                   reveal(offset, { start: offset, length: info.sectorSize });
@@ -216,6 +233,7 @@ export function DiskEditor({
           {filesOpened && (
             <div className="view-pane" hidden={view !== "files"}>
               <FileBrowser
+                key={tableVersion}
                 sourceId={info.id}
                 sectorSize={info.sectorSize}
                 scan={scan}
@@ -273,9 +291,11 @@ type HeaderProps = {
   /** The view shown, or null to hide the switch. */
   view: View | null;
   onView: (view: View) => void;
+  /** Partition table changes waiting for Apply. */
+  pending: number;
 };
 
-function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
+function EditorHeader({ title, subtitle, info, view, onView, pending }: HeaderProps) {
   return (
     <header className="view-header">
       <div>
@@ -312,12 +332,21 @@ function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
             {formatSize(info.size)} · {formatNumber(info.sectorCount)} sectors of {info.sectorSize} bytes
           </p>
         )}
-        <span
-          className="badge"
-          title="DataReco never writes to the disk you're looking at. Copying onto another disk asks you to type its name first."
-        >
-          Read-only
-        </span>
+        {pending > 0 ? (
+          <span
+            className="badge pending-badge"
+            title="Partition table changes are waiting in the Disk view. Nothing is written until you apply them and type the disk's name."
+          >
+            {pending} change{pending === 1 ? "" : "s"} not written
+          </span>
+        ) : (
+          <span
+            className="badge"
+            title="DataReco writes only when you say so: partition table changes once you apply them, and copies onto another disk, each after you type the disk's name."
+          >
+            Read-only
+          </span>
+        )}
       </div>
     </header>
   );

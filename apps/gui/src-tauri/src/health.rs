@@ -77,6 +77,15 @@ pub struct DiskTests {
     speed: Mutex<HashMap<String, (SpeedTest, FileSource)>>,
 }
 
+impl DiskTests {
+    /// The sources being tested.
+    pub fn sources_in_use(&self) -> Vec<String> {
+        let mut ids: Vec<String> = lock(&self.surface).keys().cloned().collect();
+        ids.extend(lock(&self.speed).keys().cloned());
+        ids
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

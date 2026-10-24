@@ -1835,3 +1835,101 @@ button.danger:disabled {
   max-width: 640px;
   margin-top: 6px;
 }
+
+/* Partition table changes */
+
+.edit-actions .button-row {
+  margin: 6px 0;
+}
+
+.edit-form,
+.pending {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.edit-form h3,
+.pending h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.edit-form p {
+  margin: 0 0 8px;
+}
+
+.edit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+
+.size-input {
+  width: 90px;
+}
+
+.pending p {
+  margin: 0;
+}
+
+.pending ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.pending li {
+  margin-bottom: 4px;
+}
+
+.pending-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pending li.failed .pending-line span {
+  color: var(--error);
+}
+
+.pending li.not-tried .pending-line span {
+  color: var(--dim);
+}
+
+.notice-line {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-radius: 4px;
+}
+
+.confirm-erase ul {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.undo-box .backup-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.undo-box .backup-list li {
+  margin-bottom: 4px;
+}
+
+.restore-button {
+  margin: 0 0 6px 8px;
+  padding: 0;
+}
+
+.badge.pending-badge {
+  color: var(--warning);
+  background: var(--warning-bg);
+}

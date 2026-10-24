@@ -11,15 +11,16 @@ and more.
 > included, except on APFS and btrfs), scans disks for lost and damaged volumes,
 > recovers files to another disk, finds files by their contents when no file
 > system is left, and copies failing disks into image files or onto other disks.
-> It maps each disk and checks drive health (S.M.A.R.T., surface test, read
-> speed). Partition management comes next (Phase 9: creating, deleting,
-> formatting, resizing, moving and cloning partitions); see the
-> [roadmap](docs/ROADMAP.md).
+> It maps each disk, checks drive health (S.M.A.R.T., surface test, read
+> speed), and changes partition tables: create, delete, hide, convert MBR↔GPT,
+> put lost partitions back, and undo. Formatting, resizing, moving and cloning
+> partitions come next; see the [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
-DataReco only reads the disks you look at. The one thing that writes is copying:
-into a new image file, or onto another disk once you type that disk's name.
+DataReco only reads the disks you look at, until you ask it to write: copying
+into a new image file or onto another disk, or changing a partition table. Writing
+to a disk always needs you to type its name first.
 Windows lets programs read disks and volumes directly only when they run as
 administrator; image files work without. The desktop app offers **Restart as
 administrator** when it needs to.
@@ -49,6 +50,17 @@ administrator** when it needs to.
   - **Read speed** measures big reads at the start, middle and end, and small
     reads at random places, in about 12 seconds. Write speed isn't tested:
     writing could overwrite deleted files.
+  - **Partition table changes**: pick a partition or free space on the map to
+    create a partition, delete one, hide it, set it active, change its type or
+    name, or make it logical or primary; or initialize an empty disk, or
+    convert it between MBR and GPT (keeping every partition). Changes wait in a
+    list, and the map shows the disk as it will be; nothing is written until you
+    **Apply** them and type the disk's name. The sectors they replace are saved
+    first, and **Undo a change** puts the old table back. New partitions aren't
+    formatted (Windows offers to). In **Partitions** (Sectors view), a lost
+    partition the search found can be **put back in the partition table** the
+    same way. The disk Windows runs from, dynamic disks and damaged tables are
+    left alone.
 - **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and
   btrfs volumes on the disk: folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
@@ -100,6 +112,13 @@ datareco map disk1                     # partitions and free space, with drive l
 datareco health disk0                  # S.M.A.R.T.: a verdict, why, and every value
 datareco surface disk1 -p 2            # read and time every sector of partition 2
 datareco speed disk0                   # read speed: start, middle, end, random 4 KiB
+datareco table disk1 create --size 20GiB --type ntfs   # shows the change; nothing written
+datareco table disk1 create --size 20GiB --type ntfs --apply disk1   # writes it
+datareco table disk1 delete 3 --apply disk1            # data stays on the disk
+datareco table disk1 convert gpt --apply disk1         # keeps every partition
+datareco table disk1 restore --start 206848 --sectors 41943040 --apply disk1
+datareco table disk1 undo --apply disk1                # put back the table before the last change
+datareco table disk1 backups                           # the changes made, with their backups
 datareco find backup.img --text "IMPORTANT" --ignore-case
 datareco find disk1 --hex "55 AA" -n 10
 datareco ls disk1 -p 2 -r              # every file on partition 2, deleted ones too
@@ -137,8 +156,8 @@ or an image file path.
 
 ## Safety first
 
-- **Read-only by default.** DataReco never writes to the disk you are recovering from
-  unless you turn on write mode and confirm.
+- **Read-only by default.** DataReco never writes to a disk unless you ask it to
+  and type the disk's name: copying onto it, or applying partition table changes.
 - **Recover to a different disk.** Saving recovered files to the source disk can
   overwrite the very data you are trying to get back, so DataReco blocks it. The
   same goes for image and map files when copying.
@@ -147,6 +166,14 @@ or an image file path.
   Windows runs from, and it closes the target's volumes before writing.
 - **Copy a failing drive first.** Every read can be its last: copy it once, then
   scan and recover from the copy.
+- **Partition table changes can be undone.** Before writing, DataReco saves every
+  sector it replaces to a backup (in `%LOCALAPPDATA%\DataReco\table-backups`),
+  and Undo writes them back, but only while the disk still holds what was
+  written, so it never undoes over something newer. Deleting a partition removes
+  it from the table; its files stay until something overwrites them. DataReco
+  refuses the disk Windows runs from, dynamic disks, damaged tables, and disks a
+  copy, recovery, search or test is using, and initializing never writes over
+  sectors that hold data.
 - **Health checks only read.** Windows passes S.M.A.R.T. commands to SATA drives
   only through a handle opened for writing, so the health check opens one; it
   sends three read-only commands through it (read the attributes, read their

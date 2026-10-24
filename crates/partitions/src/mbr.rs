@@ -56,6 +56,15 @@ pub(crate) fn parse(sector: &[u8]) -> Option<Mbr> {
     })
 }
 
+/// A partition table with nothing in it: the signature and four empty
+/// entries, as a freshly initialized disk has.
+pub(crate) fn is_empty_table(sector: &[u8]) -> bool {
+    has(sector, 510, &[0x55, 0xAA])
+        && sector
+            .get(446..510)
+            .is_some_and(|entries| entries.iter().all(|&b| b == 0))
+}
+
 /// Names for MBR partition type codes.
 pub(crate) fn type_name(code: u8) -> &'static str {
     match code {
