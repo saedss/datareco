@@ -17,6 +17,18 @@
   --warning: #8a5300;
   --warning-bg: #fff4dc;
   --statusbar-bg: #e9edf2;
+  /* Disk map: file system groups, and free space stripes. */
+  --seg-ntfs: #2f6fb8;
+  --seg-fat: #23845a;
+  --seg-linux: #a86412;
+  --seg-apple: #7a52bd;
+  --seg-other: #677585;
+  --seg-free-stripe: #cfd6df;
+  /* Surface test: read times. */
+  --speed-fast: #23845a;
+  --speed-normal: #8fc9ad;
+  --speed-slow: #d9a01f;
+  --speed-veryslow: #dd6418;
   --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
 
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -47,6 +59,16 @@
     --warning: #f5b546;
     --warning-bg: #3a2e14;
     --statusbar-bg: #11151a;
+    --seg-ntfs: #3d7fcf;
+    --seg-fat: #2f9a6a;
+    --seg-linux: #b97a28;
+    --seg-apple: #8c66cf;
+    --seg-other: #5f6c7c;
+    --seg-free-stripe: #343c47;
+    --speed-fast: #3fb47e;
+    --speed-normal: #2a654b;
+    --speed-slow: #e0ac3a;
+    --speed-veryslow: #f08446;
   }
 }
 
@@ -1504,4 +1526,312 @@ button.danger:disabled {
 
 .copy-done p {
   margin: 0 0 8px;
+}
+
+/* Disk view: map, health, surface and speed tests */
+
+.disk-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 16px;
+}
+
+.disk-section {
+  max-width: 980px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.disk-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.disk-section h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.disk-section > p {
+  margin: 0 0 6px;
+}
+
+.disk-section .scan-progress {
+  margin: 8px 0;
+}
+
+.disk-section .copy-map-box {
+  margin-bottom: 8px;
+}
+
+.disk-section .copy-map-box p {
+  margin: 4px 0 0;
+}
+
+.disk-bar {
+  display: flex;
+  gap: 3px;
+  height: 64px;
+  margin: 8px 0 10px;
+  overflow-x: auto;
+}
+
+.disk-seg {
+  position: relative;
+  display: flex;
+  flex-basis: 0;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 64px;
+  padding: 4px 8px 8px;
+  overflow: hidden;
+  color: #ffffff;
+  text-align: left;
+  border: none;
+  border-radius: 4px;
+}
+
+.disk-seg:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.disk-seg.selected {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.disk-seg-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disk-seg-size {
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+.disk-seg-used {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 5px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.disk-seg-used > span {
+  display: block;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.disk-seg.ntfs,
+.disk-seg.ntfs:hover:not(:disabled),
+.disk-swatch.ntfs {
+  background: var(--seg-ntfs);
+}
+
+.disk-seg.fat,
+.disk-seg.fat:hover:not(:disabled),
+.disk-swatch.fat {
+  background: var(--seg-fat);
+}
+
+.disk-seg.linux,
+.disk-seg.linux:hover:not(:disabled),
+.disk-swatch.linux {
+  background: var(--seg-linux);
+}
+
+.disk-seg.apple,
+.disk-seg.apple:hover:not(:disabled),
+.disk-swatch.apple {
+  background: var(--seg-apple);
+}
+
+.disk-seg.other,
+.disk-seg.other:hover:not(:disabled),
+.disk-swatch.other {
+  background: var(--seg-other);
+}
+
+.disk-seg.free,
+.disk-seg.free:hover:not(:disabled),
+.disk-swatch.free {
+  color: var(--muted);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--panel-hover) 0 6px,
+    var(--seg-free-stripe) 6px 8px
+  );
+}
+
+.disk-seg.unusable,
+.disk-seg.unusable:hover:not(:disabled),
+.disk-swatch.unusable {
+  color: var(--error);
+  background: repeating-linear-gradient(45deg, var(--error-bg) 0 6px, var(--panel) 6px 12px);
+}
+
+.disk-bar-extended {
+  display: flex;
+  flex-basis: 0;
+  gap: 3px;
+  min-width: min-content;
+  padding: 3px;
+  border: 2px dashed var(--seg-other);
+  border-radius: 6px;
+}
+
+.disk-table-box {
+  margin-bottom: 6px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.disk-table .disk-type {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disk-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border-radius: 2px;
+}
+
+.health-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+
+.health-verdict p {
+  margin: 0;
+}
+
+.verdict {
+  flex: none;
+  padding: 3px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 999px;
+}
+
+.verdict.good {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.verdict.caution {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.verdict.bad {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.verdict.unknown {
+  color: var(--muted);
+  background: var(--panel-hover);
+}
+
+.health-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 10px 0 6px;
+}
+
+.health-facts dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.health-facts dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.health-table {
+  margin-top: 8px;
+}
+
+.health-table tr.attribute-watch td,
+.health-table tr.attribute-failedBefore td {
+  color: var(--warning);
+}
+
+.health-table tr.attribute-failing td {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.surface-map {
+  display: grid;
+  grid-template-columns: repeat(100, 1fr);
+  gap: 1px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.sq.fast {
+  background: var(--speed-fast);
+}
+
+.sq.normal {
+  background: var(--speed-normal);
+}
+
+.sq.slow {
+  background: var(--speed-slow);
+}
+
+.sq.veryslow {
+  background: var(--speed-veryslow);
+}
+
+.surface-bad p {
+  margin: 0;
+}
+
+.surface-bad ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.surface-bad .link-button {
+  padding: 0;
+}
+
+.speed-table {
+  max-width: 640px;
+  margin-top: 6px;
 }

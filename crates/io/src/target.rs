@@ -457,6 +457,8 @@ mod tests {
             size,
             sector_size,
             physical_sector_size: None,
+            firmware: None,
+            solid_state: None,
         }
     }
 

@@ -63,4 +63,4 @@ installer tools.
 - **Code signing.** The executables aren't signed, so Windows SmartScreen shows
   "Windows protected your PC" until a download has built up reputation. Signing
   needs a code-signing certificate (or a service such as Azure Trusted Signing);
-  the roadmap has it in Phase 10.
+  the roadmap has it in Phase 11.

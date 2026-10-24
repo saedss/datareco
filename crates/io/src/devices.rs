@@ -36,6 +36,10 @@ pub struct PhysicalDiskInfo {
     pub sector_size: u32,
     /// Physical sector size, when the drive reports it (e.g. 4096 on "512e" drives).
     pub physical_sector_size: Option<u32>,
+    /// Firmware version, when the drive reports it.
+    pub firmware: Option<String>,
+    /// Whether it's a solid-state drive (no seek penalty), when Windows knows.
+    pub solid_state: Option<bool>,
 }
 
 /// A volume (partition with a file system the OS knows about).
@@ -51,6 +55,8 @@ pub struct VolumeInfo {
     pub file_system: Option<String>,
     /// Size in bytes.
     pub size: Option<u64>,
+    /// Free space in bytes, as the file system reports it (mounted volumes only).
+    pub free: Option<u64>,
     /// Where the volume lives on physical disks.
     pub extents: Vec<DiskExtent>,
 }
@@ -72,18 +78,22 @@ impl DeviceList {
         match source {
             SourceSpec::PhysicalDisk(n) => vec![*n],
             SourceSpec::Volume(name) => self
-                .volumes
-                .iter()
-                .filter(|v| {
-                    v.path.eq_ignore_ascii_case(name)
-                        || v.mount_points
-                            .iter()
-                            .any(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(name))
-                })
-                .flat_map(|v| v.extents.iter().map(|e| e.disk))
-                .collect(),
+                .volume(name)
+                .map(|v| v.extents.iter().map(|e| e.disk).collect())
+                .unwrap_or_default(),
             SourceSpec::Image(_) => Vec::new(),
         }
+    }
+
+    /// The volume a `SourceSpec::Volume` names: by its volume path or a
+    /// mount point (`C:`).
+    pub fn volume(&self, name: &str) -> Option<&VolumeInfo> {
+        self.volumes.iter().find(|v| {
+            v.path.eq_ignore_ascii_case(name)
+                || v.mount_points
+                    .iter()
+                    .any(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(name))
+        })
     }
 
     /// The physical disks holding a file or folder, which need not exist yet.
@@ -189,6 +199,7 @@ pub(crate) mod tests {
             label: None,
             file_system: Some("NTFS".to_owned()),
             size: Some(1 << 30),
+            free: None,
             extents: vec![DiskExtent {
                 disk,
                 offset: 1 << 20,

@@ -21,7 +21,7 @@ pub fn show(source: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn file_system_text(fs: Option<&FileSystem>) -> String {
+pub(crate) fn file_system_text(fs: Option<&FileSystem>) -> String {
     match fs {
         None => "-".to_owned(),
         Some(fs) => match &fs.label {

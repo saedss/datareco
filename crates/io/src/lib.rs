@@ -5,6 +5,9 @@
 //! asks the OS for write access. Writing happens only through [`target`]:
 //! new image files, image files a copy carries on into, and whole disks that
 //! passed [`check_disk_target`] and were confirmed by typing their name.
+//! The one exception is [`read_health_data`]: Windows only passes ATA
+//! S.M.A.R.T. commands on through a handle opened for writing, so it opens
+//! one, and sends only the read-only commands listed in its module.
 //!
 //! Start with [`SourceSpec`] to say what to open and [`Disk::open`] to open it.
 //! [`Disk`] serves reads at any byte offset from a block cache, and records
@@ -18,6 +21,7 @@ mod aligned;
 mod devices;
 mod disk;
 mod error;
+mod health;
 mod search;
 mod source;
 mod spec;
@@ -40,6 +44,7 @@ pub use devices::{
 };
 pub use disk::{BLOCK_SIZE, Disk, ReadOutcome, ReadPolicy};
 pub use error::{Error, Result};
+pub use health::{HEALTH_PAGE, HealthData, HealthPath, read_health_data};
 pub use search::SearchProgress;
 pub use source::{FileSource, MemorySource, SectorSource, is_device_gone};
 pub use spec::SourceSpec;

@@ -23,6 +23,9 @@ export type PhysicalDisk = {
   size: number;
   sectorSize: number;
   physicalSectorSize: number | null;
+  firmware: string | null;
+  /** Solid-state (no seek penalty), when Windows knows. */
+  solidState: boolean | null;
 };
 
 export type DiskExtent = { disk: number; offset: number; length: number };
@@ -33,6 +36,8 @@ export type Volume = {
   label: string | null;
   fileSystem: string | null;
   size: number | null;
+  /** Free space, as the file system reports it (mounted volumes only). */
+  free: number | null;
   extents: DiskExtent[];
 };
 
@@ -101,6 +106,8 @@ export type PartitionTable = {
   diskId: string | null;
   partitions: Partition[];
   wholeDisk: FileSystemInfo | null;
+  /** GPT: the sectors partitions may use. */
+  usable: { first: number; last: number } | null;
   problems: Problem[];
 };
 
@@ -269,6 +276,107 @@ export type RecoverSummary = {
   destination: string;
   log: string;
   checksums: string;
+};
+
+// ---------------------------------------------------------------- disk view
+
+export type SegmentKind = "partition" | "free" | "unusable" | "wholeDisk";
+
+/** A stretch of the disk map: a partition, or space no partition uses. */
+export type Segment = {
+  kind: SegmentKind;
+  startLba: number;
+  sectors: number;
+  /** The partition's number in the table. */
+  partition: number | null;
+  /** Inside the extended partition. */
+  logical: boolean;
+  /** Why the space can't be used. */
+  note: string | null;
+  /** The volume Windows has mounted here. */
+  volume: Volume | null;
+};
+
+export type DiskMap = { table: PartitionTable; segments: Segment[] };
+
+export type Verdict = "good" | "caution" | "bad" | "unknown";
+export type Finding = { level: "info" | "caution" | "bad"; message: string };
+
+export type SmartAttribute = {
+  id: number;
+  name: string;
+  current: number;
+  worst: number;
+  threshold: number | null;
+  raw: number;
+  prefail: boolean;
+  state: "ok" | "watch" | "failedBefore" | "failing";
+};
+
+export type NvmeHealth = {
+  criticalWarning: number;
+  temperature: number | null;
+  availableSpare: number;
+  spareThreshold: number;
+  percentageUsed: number;
+  bytesRead: number;
+  bytesWritten: number;
+  hostReads: number;
+  hostWrites: number;
+  busyMinutes: number;
+  powerCycles: number;
+  powerOnHours: number;
+  unsafeShutdowns: number;
+  mediaErrors: number;
+  errorLogEntries: number;
+  warningTemperatureMinutes: number;
+  criticalTemperatureMinutes: number;
+};
+
+export type HealthReport = {
+  verdict: Verdict;
+  summary: string;
+  source: string | null;
+  findings: Finding[];
+  temperature: number | null;
+  powerOnHours: number | null;
+  powerCycles: number | null;
+  lifeUsed: number | null;
+  bytesWritten: number | null;
+  bytesRead: number | null;
+  solidState: boolean | null;
+  rpm: number | null;
+  attributes: SmartAttribute[];
+  nvme: NvmeHealth | null;
+};
+
+export type DiskHealth = { disk: number | null; report: HealthReport };
+
+export type SpeedCounts = { fast: number; normal: number; slow: number; verySlow: number; unreadable: number };
+
+export type SurfaceProgress = {
+  startLba: number;
+  sectors: number;
+  tested: number;
+  counts: SpeedCounts;
+  unreadableSectors: number;
+  badRanges: { startLba: number; sectors: number }[];
+  badRangeCount: number;
+  elapsedMs: number;
+  bytesPerSecond: number;
+  /** One symbol per square: . untested, f fast, n normal, s slow, v very slow, x unreadable. */
+  picture: string;
+  done: boolean;
+  stopped: string | null;
+};
+
+export type SpeedStatus = {
+  sequential: { place: "start" | "middle" | "end"; startLba: number; bytesPerSecond: number }[];
+  random: { readsPerSecond: number; bytesPerSecond: number; averageMicros: number } | null;
+  errors: number;
+  percent: number;
+  done: boolean;
+  stopped: string | null;
 };
 
 export type CommandError = {
@@ -442,6 +550,20 @@ export const api = {
   continueCopy: (id: string) => invoke<CopyStatus>("continue_copy", { id }),
   /** Saves the map and closes the target; null if no copy was running. */
   stopCopy: (id: string) => invoke<CopyStatus | null>("stop_copy", { id }),
+
+  /** The partitions and free space on the source, with their volumes. */
+  diskMap: (id: string) => invoke<DiskMap>("disk_map", { id }),
+  /** The drive's S.M.A.R.T. health (of the disk under a volume). */
+  diskHealth: (id: string) => invoke<DiskHealth>("disk_health", { id }),
+  /** Starts a surface test of the whole source or one partition; then call continueSurfaceTest. */
+  startSurfaceTest: (id: string, partition: number | null) =>
+    invoke<SurfaceProgress>("start_surface_test", { id, partition }),
+  continueSurfaceTest: (id: string) => invoke<SurfaceProgress>("continue_surface_test", { id }),
+  /** Ends a surface test; null if none was running. */
+  stopSurfaceTest: (id: string) => invoke<SurfaceProgress | null>("stop_surface_test", { id }),
+  startSpeedTest: (id: string) => invoke<SpeedStatus>("start_speed_test", { id }),
+  continueSpeedTest: (id: string) => invoke<SpeedStatus>("continue_speed_test", { id }),
+  stopSpeedTest: (id: string) => invoke<void>("stop_speed_test", { id }),
 
   /** Restarts elevated, reopening `open` (a source id) if given. */
   restartAsAdmin: (open: string | null) => invoke<void>("restart_as_admin", { open }),

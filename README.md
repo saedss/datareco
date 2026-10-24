@@ -4,14 +4,17 @@ A disk editor and data recovery tool: browse and edit raw disk sectors, find los
 partitions, and recover deleted or lost files from NTFS, FAT, exFAT, ext4, HFS+, APFS, btrfs
 and more.
 
-> **Status: early development (Phase 8).** DataReco lists your disks and volumes,
+> **Status: early development (Phase 9).** DataReco lists your disks and volumes,
 > has a read-only disk editor (hex view, search, bookmarks, structure templates),
 > reads and checks MBR and GPT partition tables, finds lost partitions, browses
 > NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and btrfs volumes (deleted files
 > included, except on APFS and btrfs), scans disks for lost and damaged volumes,
 > recovers files to another disk, finds files by their contents when no file
 > system is left, and copies failing disks into image files or onto other disks.
-> ReFS comes next; see the [roadmap](docs/ROADMAP.md).
+> It maps each disk and checks drive health (S.M.A.R.T., surface test, read
+> speed). Partition management comes next (Phase 9: creating, deleting,
+> formatting, resizing, moving and cloning partitions); see the
+> [roadmap](docs/ROADMAP.md).
 
 ## Using it
 
@@ -35,6 +38,17 @@ administrator** when it needs to.
   damaged GPT header. **Quick search** and **Full search** find lost partitions
   from the boot sectors, superblocks and backups left on the disk.
 - **Bookmarks** remember places, separately for each disk and image.
+- **Disk** (top right) maps the disk: its partitions and free space as a bar
+  and a table, with drive letters, labels and how full each volume is. Below it:
+  - **Health** reads the drive's S.M.A.R.T. data (SATA and NVMe drives, and USB
+    adapters that pass it on) and says in plain words whether it's good, worth
+    watching or failing, with every value on request.
+  - **Surface test** reads every sector once (or one partition's) and times
+    it, drawing slow and unreadable areas on a map. Nothing is written or
+    repaired; on a failing drive, copy it first.
+  - **Read speed** measures big reads at the start, middle and end, and small
+    reads at random places, in about 12 seconds. Write speed isn't tested:
+    writing could overwrite deleted files.
 - **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and
   btrfs volumes on the disk: folders, files and their details, a preview, and deleted files and folders
   (struck through). NTFS files whose folder is gone are under **Lost files**.
@@ -82,6 +96,10 @@ datareco decode C: ntfs_mft_record --offset 0xC0000000
 datareco templates                     # the structures decode understands
 datareco partitions disk1              # the partition table, file systems, problems
 datareco find-partitions disk1 --full  # search every sector for lost partitions
+datareco map disk1                     # partitions and free space, with drive letters
+datareco health disk0                  # S.M.A.R.T.: a verdict, why, and every value
+datareco surface disk1 -p 2            # read and time every sector of partition 2
+datareco speed disk0                   # read speed: start, middle, end, random 4 KiB
 datareco find backup.img --text "IMPORTANT" --ignore-case
 datareco find disk1 --hex "55 AA" -n 10
 datareco ls disk1 -p 2 -r              # every file on partition 2, deleted ones too
@@ -129,6 +147,11 @@ or an image file path.
   Windows runs from, and it closes the target's volumes before writing.
 - **Copy a failing drive first.** Every read can be its last: copy it once, then
   scan and recover from the copy.
+- **Health checks only read.** Windows passes S.M.A.R.T. commands to SATA drives
+  only through a handle opened for writing, so the health check opens one; it
+  sends three read-only commands through it (read the attributes, read their
+  thresholds, identify the drive) and nothing else. It never changes a drive's
+  settings, not even to turn S.M.A.R.T. on.
 
 ## Download
 
@@ -150,7 +173,7 @@ aren't signed yet, so Windows SmartScreen may ask you to confirm the first time
 
 ## Building
 
-DataReco targets Windows for now; Linux and macOS support comes in Phase 10.
+DataReco targets Windows for now; Linux and macOS support comes in Phase 11.
 
 Prerequisites:
 

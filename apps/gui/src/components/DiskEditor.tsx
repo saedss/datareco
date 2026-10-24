@@ -3,6 +3,7 @@ import { ByteData, CommandError, RawStatus, ScanStatus, SourceInfo, TemplateList
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
 import { BookmarksPanel } from "./BookmarksPanel";
 import { CopyView } from "./CopyView";
+import { DiskView } from "./DiskView";
 import { FileBrowser } from "./FileBrowser";
 import { BYTES_PER_ROW, HexGrid, Range } from "./HexGrid";
 import { PartitionsPanel } from "./PartitionsPanel";
@@ -20,11 +21,12 @@ type Props = {
   onOpenImage: (path: string) => void;
 };
 
-type View = "sectors" | "files" | "scan" | "copy";
+type View = "sectors" | "disk" | "files" | "scan" | "copy";
 
 /** The disk editor (view only): sectors as hex with navigation, search and
- *  structures; the files on its volumes; a scan for lost volumes; or copying
- *  it into an image file or onto another disk. */
+ *  structures; a map of the disk with its health; the files on its volumes;
+ *  a scan for lost volumes; or copying it into an image file or onto another
+ *  disk. */
 export function DiskEditor({
   sourceId,
   title,
@@ -49,6 +51,7 @@ export function DiskEditor({
   const [filesOpened, setFilesOpened] = useState(false);
   const [scanOpened, setScanOpened] = useState(false);
   const [copyOpened, setCopyOpened] = useState(false);
+  const [diskOpened, setDiskOpened] = useState(false);
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [raw, setRaw] = useState<RawStatus | null>(null);
   const [browse, setBrowse] = useState<{ key: string; nonce: number } | null>(null);
@@ -59,6 +62,7 @@ export function DiskEditor({
     if (next === "files") setFilesOpened(true);
     if (next === "scan") setScanOpened(true);
     if (next === "copy") setCopyOpened(true);
+    if (next === "disk") setDiskOpened(true);
   }, []);
 
   useEffect(() => {
@@ -197,6 +201,18 @@ export function DiskEditor({
             </div>
             <CursorInfo info={info} cursor={cursor} data={data} selection={selection} status={status} />
           </div>
+          {diskOpened && (
+            <div className="view-pane" hidden={view !== "disk"}>
+              <DiskView
+                sourceId={info.id}
+                sectorSize={info.sectorSize}
+                onShowInSectors={(offset) => {
+                  setView("sectors");
+                  reveal(offset, { start: offset, length: info.sectorSize });
+                }}
+              />
+            </div>
+          )}
           {filesOpened && (
             <div className="view-pane" hidden={view !== "files"}>
               <FileBrowser
@@ -275,6 +291,9 @@ function EditorHeader({ title, subtitle, info, view, onView }: HeaderProps) {
           <div className="view-switch" role="tablist" aria-label="View">
             <button role="tab" aria-selected={view === "sectors"} onClick={() => onView("sectors")}>
               Sectors
+            </button>
+            <button role="tab" aria-selected={view === "disk"} onClick={() => onView("disk")}>
+              Disk
             </button>
             <button role="tab" aria-selected={view === "files"} onClick={() => onView("files")}>
               Files
