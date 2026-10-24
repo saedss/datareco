@@ -30,104 +30,116 @@ Windows lets programs read disks and volumes directly only when they run as
 administrator; image files work without. The desktop app offers **Restart as
 administrator** when it needs to.
 
-**Desktop app:** pick a disk, volume or image file on the left.
+**Desktop app.** Every action is in the menu bar (File, Edit, View, Disk,
+Partition, Recovery, Tools, Help), with shortcuts for the common ones (Help ›
+Keyboard shortcuts, Ctrl+/), and **Search actions** (Ctrl+K) finds any of them by
+name: try "recover", "image" or "format". On the left, **This PC** lists each
+disk with its partitions under it (the disk Windows runs from is marked), then
+other drives and image files. Pick one, and its tabs are:
 
-- Scroll through the whole disk; arrow keys, Page Up/Down and Ctrl+Home/End move
-  the cursor. Sector numbers are shown on the left.
-- **Go to** a sector or byte offset (decimal, or hex starting with `0x`).
-- **Find** text, UTF-16 text or hex bytes from the cursor onwards.
-- **Structure** suggests what starts at the cursor's sector (MBR, GPT, boot
-  sectors, MFT records, …) and decodes it field by field; click a field to see
-  its bytes. You can [write your own templates](docs/TEMPLATES.md).
-- **Partitions** shows the partition table (MBR with logical partitions, or GPT)
-  with each partition's file system, and flags problems such as overlaps or a
-  damaged GPT header. **Quick search** and **Full search** find lost partitions
-  from the boot sectors, superblocks and backups left on the disk.
-- **Bookmarks** remember places, separately for each disk and image.
-- **Disk** (top right) maps the disk: its partitions and free space as a bar
-  and a table, with drive letters, labels and how full each volume is. Below it:
-  - **Health** reads the drive's S.M.A.R.T. data (SATA and NVMe drives, and USB
-    adapters that pass it on) and says in plain words whether it's good, worth
-    watching or failing, with every value on request.
-  - **Surface test** reads every sector once (or one partition's) and times
-    it, drawing slow and unreadable areas on a map. Nothing is written or
-    repaired; on a failing drive, copy it first.
-  - **Read speed** measures big reads at the start, middle and end, and small
-    reads at random places, in about 12 seconds. Write speed isn't tested:
-    writing could overwrite deleted files.
-  - **Partition table changes**: pick a partition or free space on the map to
-    create a partition, delete one, hide it, set it active, change its type or
-    name, or make it logical or primary; or initialize an empty disk, or
-    convert it between MBR and GPT (keeping every partition). Changes wait in a
-    list, and the map shows the disk as it will be; nothing is written until you
-    **Apply** them and type the disk's name. The sectors they replace are saved
-    first, and **Undo a change** puts the old table back. New partitions aren't
-    formatted (Windows offers to). In **Partitions** (Sectors view), a lost
-    partition the search found can be **put back in the partition table** the
-    same way. The disk Windows runs from, dynamic disks and damaged tables are
-    left alone.
+- **Overview**: the disk map, its partitions and free space as a bar and a
+  table, with drive letters, labels and how full each volume is, and what each
+  tab is for.
+- **Browse files**: the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and btrfs volumes
+  on the disk: folders, files and their details, a preview, and deleted files
+  and folders (struck through). NTFS files whose folder is gone are under **Lost
+  files**. ext3 and ext4 clear a deleted file's size and where its data was;
+  DataReco finds them in an older copy of the file's inode in the journal, when
+  it still has one. On HFS+ (Mac OS Extended), a file's resource fork shows as a
+  stream called `rsrc`, and deleted files are found when their catalog records
+  are left over in the catalog's free space. An APFS container shows a folder
+  per volume ("Macintosh HD - Data", "Preboot", …); encrypted volumes can't be
+  read yet, and deleted APFS files aren't found yet. btrfs subvolumes show as
+  folders; compressed btrfs files and deleted ones can't be read yet. Tick files
+  and folders and **Recover selected…**, or **Recover everything…**, to save them
+  to a folder on another disk.
+- **Recover data**: every way to find data that's gone, easiest first.
+  - **Search for lost drives**: the **quick search** checks the partition
+    table, where drives usually start and the backup boot sectors at the end;
+    the **deep search** reads every sector and also finds drives whose boot
+    sector, partition entry or FAT is gone, and NTFS files from before a
+    format. Searches can be paused, saved and carried on later; **Browse
+    files** opens a drive one found.
+  - **Find lost partitions** from the boot sectors, superblocks and backups
+    left on the disk. One found can be **put back in the partition table**, as
+    a change you review in Partitions.
+  - **Find files by type** recognizes files by their contents (photos,
+    documents, archives, music, video) when no file system says where they
+    are, for example after a format. What it finds opens in Browse files in a
+    folder per kind. **File types to look for…** opens the list of what it
+    looks for, to change it or add your own.
+- **Partitions**: pick a partition or free space on the map, then an action.
+  - **Partition table changes**: create a partition, delete one, hide it, set
+    it active, change its type or name, or make it logical or primary; or
+    initialize an empty disk, or convert it between MBR and GPT (keeping every
+    partition). Changes wait in a list, and the map shows the disk as it will
+    be; nothing is written until you **Apply** them and type the disk's name.
+    The sectors they replace are saved first, and **Undo a change** puts the old
+    table back. New partitions aren't formatted (Windows offers to). The disk
+    Windows runs from, dynamic disks and damaged tables are left alone.
   - **Format** a partition: FAT32 (also over 32 GiB, which Windows won't do)
     and exFAT are made by DataReco and read back to check them; NTFS by
     Windows' own formatter. **Wipe** writes zeros or random bytes over a
-    partition or the whole disk, so nothing on it can be recovered; it shows
-    its progress and can be stopped. **Change label** and **Change drive
-    letter** do what they say. Formatting or wiping a partition closes only
-    its own volume, so partitions on the disk Windows runs from can be
-    formatted too (not Windows' own, and the whole disk can't be wiped).
+    partition or the whole disk, so nothing on it can be recovered. **Change
+    label** and **Change drive letter** do what they say. Formatting or wiping
+    a partition closes only its own volume, so partitions on the disk Windows
+    runs from can be formatted too (not Windows' own, and the whole disk can't
+    be wiped).
   - **Move** a partition into free space next to it, or by a number of MiB:
     DataReco copies it block by block, updates its boot sector, then writes
     the new partition table. A journal (in `%LOCALAPPDATA%\DataReco\moves`)
     records each step, so a move that was stopped, or cut off by a power cut,
-    carries on where it left off (**Carry on…** on the Disk view); until then
+    carries on where it left off (**Carry on…** in Partitions); until then
     nothing else changes that disk. **Align to 1 MiB** moves a partition that
     doesn't start on a 1 MiB boundary onto one, which SSDs and drives with
     4 KiB sectors work best with. **Resize** shrinks or grows an NTFS
     partition through Windows (which moves files out of the way when
     shrinking), C: included while Windows runs from it; growing needs free
     space right after the partition.
-  - **Copy to another disk** copies the whole disk, or the partition picked
-    on the map, onto another disk. Only the space files use is copied (for
-    NTFS, FAT and exFAT; other partitions whole), so a smaller disk will do
-    as long as the partitions fit: they're moved closer together if they
-    have to be. A whole disk goes over everything on the target; one
-    partition goes into free space there and is added to its partition table
-    (backed up first, so **Undo a change** takes it off again). On the disk
-    Windows runs from the button says **Move Windows to another disk**: C:
-    is read from a snapshot Windows takes, and the copy keeps the disk's IDs
-    so Windows starts from it once you start the computer from the new disk.
-- **Files** (top right) browses the NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS and
-  btrfs volumes on the disk: folders, files and their details, a preview, and deleted files and folders
-  (struck through). NTFS files whose folder is gone are under **Lost files**.
-  ext3 and ext4 clear a deleted file's size and where its data was; DataReco
-  finds them in an older copy of the file's inode in the journal, when it still
-  has one. On HFS+ (Mac OS Extended), a file's resource fork shows as a stream
-  called `rsrc`, and deleted files are found when their catalog records are left
-  over in the catalog's free space. An APFS container shows a folder per volume
-  ("Macintosh HD - Data", "Preboot", …); encrypted volumes can't be read yet, and
-  deleted APFS files aren't found yet. btrfs subvolumes show as folders;
-  compressed btrfs files and deleted ones can't be read yet.
-  **Show in sectors** jumps to where a file's data is. Tick files and folders and
-  **Recover selected…**, or **Recover everything…**, to save them to a folder on
-  another disk.
-- **Scan** (top right) looks for volumes, including lost and damaged ones. A
-  **quick scan** checks the partition table, where volumes usually start and the
-  backup boot sectors at the end; a **full scan** reads every sector and also finds
-  volumes whose boot sector, partition entry or FAT is gone, and NTFS files from
-  before a format. Scans can be paused, saved and carried on later. **Browse files**
-  opens a volume it found in the Files view.
-- **Raw scan** (in Scan) finds files by their contents (photos, documents,
-  archives, music, video) when no file system says where they are, for example
-  after a format. What it finds opens in the Files view in a folder per kind,
-  ready to preview and recover. **Edit signatures…** opens the list of what it
-  looks for, to change it or add your own.
-- **Copy** (top right) copies the whole disk into an image file or onto another
-  disk, in passes made for failing drives: a fast first pass that skips past read
-  errors, then backwards, then the edges and insides of what failed, then retries.
-  A map file records what was copied (shown as a picture), so a copy can be paused
-  and carried on, even after closing DataReco. Then recover from the copy instead of
-  the failing drive. Copying onto a disk shows what will be erased and asks you to
-  type its name; DataReco refuses the disk being copied, the disk Windows runs
-  from, and disks holding the image or map file.
+- **Back up & clone**: four kinds of copy, each saying what it does.
+  - **Create a disk image** copies every sector into an image file, in passes
+    made for failing drives: a fast first pass that skips past read errors,
+    then backwards, then the edges and insides of what failed, then retries. A
+    map file records what was copied (shown as a picture), so it can be paused
+    and carried on, even after closing DataReco. Then recover from the image
+    instead of a failing drive.
+  - **Rescue a failing drive onto another disk** does the same onto a disk
+    (for an image file: **Restore this image onto a disk**). It shows what will
+    be erased and asks you to type its name; DataReco refuses the disk being
+    copied, the disk Windows runs from, and disks holding the image or map
+    file.
+  - **Clone onto another disk** copies the partitions, only the space files
+    use (for NTFS, FAT and exFAT; other partitions whole), so a smaller disk
+    will do as long as they fit: they're moved closer together if they have
+    to be. On the disk Windows runs from it's **Move Windows to a new disk**:
+    C: is read from a snapshot Windows takes, and the copy keeps the disk's
+    IDs so Windows starts from it once you start the computer from the new
+    disk.
+  - **Copy one partition** into free space on another disk, added to its
+    partition table (backed up first, so **Undo a change** takes it off again).
+- **Health**: **Check health** reads the drive's S.M.A.R.T. data (SATA and NVMe
+  drives, and USB adapters that pass it on) and says in plain words whether it's
+  good, worth watching or failing, with every value on request. **Surface test**
+  reads every sector once (or one partition's) and times it, drawing slow and
+  unreadable areas on a map; nothing is written or repaired, and on a failing
+  drive, rescue it first. **Read speed** measures big reads at the start, middle
+  and end, and small reads at random places, in about 12 seconds. Write speed
+  isn't tested: writing could overwrite deleted files.
+- **Hex editor**: scroll through the whole disk; arrow keys, Page Up/Down and
+  Ctrl+Home/End move the cursor. **Go to** (Ctrl+G) a sector or byte offset
+  (decimal, or hex starting with `0x`); **Find** (Ctrl+F) text, UTF-16 text or
+  hex bytes from the cursor onwards. **Structure** suggests what starts at the
+  cursor's sector (MBR, GPT, boot sectors, MFT records, …) and decodes it field
+  by field; you can [write your own templates](docs/TEMPLATES.md).
+  **Partitions** shows the partition table and flags problems such as overlaps
+  or a damaged GPT header. **Bookmarks** remember places, separately for each
+  disk and image.
+
+**Activity** (Ctrl+J, or the status bar) lists every copy, search, test, move
+and recovery, on every disk, with Pause, Carry on and Stop where they apply.
+Disks you've opened stay open, so what runs on one keeps running while you look
+at another; **Show** goes back to it. **File › Close** (Ctrl+W) closes a disk,
+asking first if something still runs on it.
 
 `datareco-gui --open disk0` starts on a given source.
 
@@ -214,8 +226,8 @@ or an image file path.
 - **Copying onto a disk erases it**, so DataReco shows what's on it and asks you to
   type its name first. It never writes onto the disk being copied or the disk
   Windows runs from, and it closes the target's volumes before writing.
-- **Copy a failing drive first.** Every read can be its last: copy it once, then
-  scan and recover from the copy.
+- **Copy a failing drive first.** Every read can be its last: copy it once (Back
+  up & clone › Create a disk image), then search and recover from the copy.
 - **Partition table changes can be undone.** Before writing, DataReco saves every
   sector it replaces to a backup (in `%LOCALAPPDATA%\DataReco\table-backups`),
   and Undo writes them back, but only while the disk still holds what was

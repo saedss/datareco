@@ -29,10 +29,12 @@ type ActionsProps = {
   isDisk: boolean;
   onOp: (op: Operation) => void;
   onForm: (form: EditForm) => void;
+  /** Copies the partition to another disk. */
+  onCopy: (segment: Segment) => void;
 };
 
 /** What can be done to the selected part of the disk, and to the whole disk. */
-export function EditActions({ view, segment, sectorSize, disabled, pending, isDisk, onOp, onForm }: ActionsProps) {
+export function EditActions({ view, segment, sectorSize, disabled, pending, isDisk, onOp, onForm, onCopy }: ActionsProps) {
   const table = view.map.table;
   const partition = segment?.partition != null ? table.partitions.find((p) => p.number === segment.partition) : null;
   const extended = table.partitions.find((p) => p.kind === "extended");
@@ -111,6 +113,8 @@ export function EditActions({ view, segment, sectorSize, disabled, pending, isDi
           button("Move…", () => onForm({ kind: "move", segment }), "Copy it block by block to another place on the disk"),
           misaligned && button("Align to 1 MiB…", () => onForm({ kind: "move", segment, align: true })),
           isDisk && ntfs && button("Resize…", () => onForm({ kind: "resize", segment }), "Shrink or grow it, through Windows"),
+          isDisk &&
+            button("Copy to another disk…", () => onCopy(segment), "Copy it into free space on another disk (Back up & clone)"),
         ]
       : [];
   return (

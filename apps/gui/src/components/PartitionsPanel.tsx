@@ -1,55 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { FileSystemInfo, FoundPartition, Operation, PartitionTable, ScanMode, SearchStatus, api, toCommandError } from "../api";
+import { useActivity } from "../activity";
 import { formatNumber, formatSize } from "../format";
 
-type Props = {
+type TableProps = {
   sourceId: string;
   sectorSize: number;
   /** Shows the first sector of a partition. */
   onJump: (offset: number) => void;
-  /** Adds putting a found partition back in the table to the Disk view's
-   *  pending changes; `needsTable` when the disk has none to add it to. */
-  onRestore: (op: Operation, needsTable: boolean) => void;
 };
 
-/** The partition table, its problems, and the search for lost partitions. */
-export function PartitionsPanel({ sourceId, sectorSize, onJump, onRestore }: Props) {
+/** The partition table and its problems, for the hex editor's side panel. */
+export function PartitionsPanel({ sourceId, sectorSize, onJump }: TableProps) {
   const [table, setTable] = useState<PartitionTable | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState<SearchStatus | null>(null);
-  const [running, setRunning] = useState(false);
-  const stopped = useRef(false);
 
   useEffect(() => {
     api
       .readPartitions(sourceId)
       .then(setTable)
       .catch((e) => setError(toCommandError(e).message));
-    // Leaving the panel stops a running search.
-    return () => {
-      stopped.current = true;
-      api.stopPartitionSearch(sourceId).catch(() => {});
-    };
   }, [sourceId]);
-
-  async function run(mode: ScanMode) {
-    stopped.current = false;
-    setRunning(true);
-    setError(null);
-    try {
-      let status = await api.startPartitionSearch(sourceId, mode);
-      setSearch(status);
-      while (!status.progress.done && !stopped.current) {
-        status = await api.continuePartitionSearch(sourceId);
-        setSearch(status);
-      }
-      if (stopped.current) await api.stopPartitionSearch(sourceId);
-    } catch (e) {
-      setError(toCommandError(e).message);
-    } finally {
-      setRunning(false);
-    }
-  }
 
   const jump = (lba: number) => onJump(lba * sectorSize);
 
@@ -89,19 +60,83 @@ export function PartitionsPanel({ sourceId, sectorSize, onJump, onRestore }: Pro
           ))}
         </ul>
       )}
+      <p className="muted small panel-section">Lost partitions are searched for in Recover data.</p>
+    </div>
+  );
+}
 
+type SearchProps = TableProps & {
+  /** Adds putting a found partition back in the table to the Partitions
+   *  tab's pending changes; `needsTable` when the disk has none to add it to. */
+  onRestore: (op: Operation, needsTable: boolean) => void;
+};
+
+/** The search for lost partitions, from boot sectors and other traces. */
+export function LostPartitionSearch({ sourceId, sectorSize, onJump, onRestore }: SearchProps) {
+  const [table, setTable] = useState<PartitionTable | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState<SearchStatus | null>(null);
+  const [running, setRunning] = useState(false);
+  const stopped = useRef(false);
+
+  useEffect(() => {
+    api
+      .readPartitions(sourceId)
+      .then(setTable)
+      .catch(() => setTable(null));
+    // Closing the disk stops a running search.
+    return () => {
+      stopped.current = true;
+      api.stopPartitionSearch(sourceId).catch(() => {});
+    };
+  }, [sourceId]);
+
+  async function run(mode: ScanMode) {
+    stopped.current = false;
+    setRunning(true);
+    setError(null);
+    try {
+      let status = await api.startPartitionSearch(sourceId, mode);
+      setSearch(status);
+      while (!status.progress.done && !stopped.current) {
+        status = await api.continuePartitionSearch(sourceId);
+        setSearch(status);
+      }
+      if (stopped.current) await api.stopPartitionSearch(sourceId);
+    } catch (e) {
+      setError(toCommandError(e).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const jump = (lba: number) => onJump(lba * sectorSize);
+  const p = search?.progress;
+  useActivity(
+    `${sourceId}:partsearch`,
+    sourceId,
+    p
+      ? {
+          label: search.mode === "full" ? "Deep search for lost partitions" : "Quick search for lost partitions",
+          detail: p.done ? `${search.found.length} found` : `${formatSize(p.position)} of ${formatSize(p.total)}`,
+          percent: p.total > 0 ? Math.round((p.position / p.total) * 1000) / 10 : null,
+          state: error ? "failed" : running ? "running" : p.done ? "finished" : "stopped",
+          view: "recover",
+        }
+      : null,
+    { stop: () => (stopped.current = true) },
+  );
+
+  return (
+    <div className="partitions-panel">
       <section className="panel-section">
-        <h3>Lost partitions</h3>
-        <p className="muted small">
-          Looks for boot sectors and other traces of partitions, for example after a partition table was
-          wiped. Nothing on the disk is changed.
-        </p>
+        {error && <p className="problem error">{error}</p>}
         <div className="button-row">
           <button onClick={() => run("quick")} disabled={running} title="Where partitions usually start. Fast.">
             Quick search
           </button>
           <button onClick={() => run("full")} disabled={running} title="Every sector. Finds more; slow on big disks.">
-            Full search
+            Deep search (every sector)
           </button>
           {running && (
             <button onClick={() => (stopped.current = true)} className="stop">
@@ -142,7 +177,7 @@ export function PartitionsPanel({ sourceId, sectorSize, onJump, onRestore }: Pro
               {!f.inTable && (
                 <button
                   className="link-button restore-button"
-                  title="Adds it to the pending changes in the Disk view; nothing is written until you apply them"
+                  title="Adds it to the pending changes in Partitions; nothing is written until you apply them"
                   onClick={() => onRestore(restoreOp(f), table?.kind === "none")}
                 >
                   Put it back in the partition table…
@@ -192,15 +227,15 @@ function fileSystemText(fs: FileSystemInfo | null): string {
 
 function searchText(search: SearchStatus, running: boolean): string {
   const { position, total, clues, done } = search.progress;
-  const kind = search.mode === "full" ? "Full" : "Quick";
+  const kind = search.mode === "full" ? "Deep" : "Quick";
   if (!done) {
     const where = `${formatSize(position)} of ${formatSize(total)}`;
     return running ? `${kind} search… ${where}, ${clues} clues so far.` : `${kind} search stopped at ${where}.`;
   }
   if (search.found.length === 0) {
     return search.mode === "quick"
-      ? "Quick search done: nothing found. A full search looks at every sector and can find more."
-      : "Full search done: nothing found.";
+      ? "Quick search done: nothing found. The deep search reads every sector and can find more."
+      : "Deep search done: nothing found.";
   }
   return `${kind} search done: ${search.found.length} partition${search.found.length === 1 ? "" : "s"} found. Click one to see its first sector.`;
 }

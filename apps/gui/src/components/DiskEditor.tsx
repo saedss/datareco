@@ -1,37 +1,42 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ByteData, CommandError, Operation, RawStatus, ScanStatus, SourceInfo, TemplateList, api, toCommandError } from "../api";
+import { View } from "../activity";
+import { BackupTask, HexPanel, Intent, TABS, TAB_NAMES } from "../commands";
 import { formatNumber, formatSize, hex, parseHexBytes, parseNumber, utf16Bytes, utf8Bytes } from "../format";
+import { BackupView } from "./BackupView";
 import { BookmarksPanel } from "./BookmarksPanel";
-import { CopyView } from "./CopyView";
 import { DiskView } from "./DiskView";
 import { FileBrowser } from "./FileBrowser";
+import { HealthView } from "./HealthView";
 import { BYTES_PER_ROW, HexGrid, Range } from "./HexGrid";
+import { OverviewView } from "./OverviewView";
 import { PartitionsPanel } from "./PartitionsPanel";
-import { ScanView } from "./ScanView";
+import { RecoverView } from "./RecoverView";
 import { StructurePanel } from "./StructurePanel";
 
 type Props = {
   sourceId: string;
   title: string;
   subtitle: string;
+  /** The disk Windows runs from. */
+  windows: boolean;
   templates: TemplateList | null;
+  /** Where to go, asked for by a menu or Activity. */
+  request: (Intent & { nonce: number }) | null;
   onReloadTemplates: () => void;
   onRestartAsAdmin: () => void;
   /** Opens an image file (a finished copy) in the editor. */
   onOpenImage: (path: string) => void;
 };
 
-type View = "sectors" | "disk" | "files" | "scan" | "copy";
-
-/** The disk editor (view only): sectors as hex with navigation, search and
- *  structures; a map of the disk with its health; the files on its volumes;
- *  a scan for lost volumes; or copying it into an image file or onto another
- *  disk. */
+/** A disk's (or image's) workspace: its tabs, Overview to Hex editor. */
 export function DiskEditor({
   sourceId,
   title,
   subtitle,
+  windows,
   templates,
+  request,
   onReloadTemplates,
   onRestartAsAdmin,
   onOpenImage,
@@ -44,14 +49,11 @@ export function DiskEditor({
   const [selection, setSelection] = useState<Range | null>(null);
   const [data, setData] = useState<ByteData | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [tab, setTab] = useState<"structure" | "partitions" | "bookmarks">("structure");
-  const [view, setView] = useState<View>("sectors");
-  // The file browser and scan view start only when first shown (NTFS reads
-  // its whole MFT), then stay, so what they show survives switching views.
-  const [filesOpened, setFilesOpened] = useState(false);
-  const [scanOpened, setScanOpened] = useState(false);
-  const [copyOpened, setCopyOpened] = useState(false);
-  const [diskOpened, setDiskOpened] = useState(false);
+  const [tab, setTab] = useState<HexPanel>("structure");
+  const [view, setView] = useState<View>("overview");
+  // Tabs start when first shown (Browse files reads a whole MFT), then stay,
+  // so what they show, and anything running in them, survives switching.
+  const [opened, setOpened] = useState<Set<View>>(new Set(["overview", "hex"]));
   // Partition table changes waiting for Apply, and a count of the changes
   // written, so views that read the table read it again.
   const [ops, setOps] = useState<Operation[]>([]);
@@ -59,15 +61,33 @@ export function DiskEditor({
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [raw, setRaw] = useState<RawStatus | null>(null);
   const [browse, setBrowse] = useState<{ key: string; nonce: number } | null>(null);
+  const [backup, setBackup] = useState<{ task: BackupTask; startLba?: number; nonce: number } | null>(null);
   const latestRead = useRef(0);
+  const root = useRef<HTMLElement>(null);
 
   const showView = useCallback((next: View) => {
     setView(next);
-    if (next === "files") setFilesOpened(true);
-    if (next === "scan") setScanOpened(true);
-    if (next === "copy") setCopyOpened(true);
-    if (next === "disk") setDiskOpened(true);
+    setOpened((current) => (current.has(next) ? current : new Set(current).add(next)));
   }, []);
+
+  // Requests from the menus and Activity.
+  useEffect(() => {
+    if (!request) return;
+    showView(request.view);
+    if (request.panel) setTab(request.panel);
+    if (request.backup) setBackup({ task: request.backup, startLba: request.startLba, nonce: request.nonce });
+    if (request.focus) {
+      const focus = request.focus;
+      requestAnimationFrame(() =>
+        root.current?.querySelector<HTMLInputElement>(`[data-focus="${focus}"]`)?.focus(),
+      );
+    }
+  }, [request, showView]);
+
+  const showInHex = (offset: number, length: number | null) => {
+    showView("hex");
+    reveal(offset, length === null ? null : { start: offset, length });
+  };
 
   useEffect(() => {
     api
@@ -120,15 +140,17 @@ export function DiskEditor({
 
   if (error?.kind === "access_denied") {
     return (
-      <section className="editor">
+      <section className="editor" ref={root}>
         <EditorHeader title={title} subtitle={subtitle} info={info} view={null} onView={showView} pending={0} />
         <AdminNeeded onRestart={onRestartAsAdmin} />
       </section>
     );
   }
 
+  const isImage = sourceId.startsWith("image:");
+
   return (
-    <section className="editor">
+    <section className="editor" ref={root}>
       <EditorHeader title={title} subtitle={subtitle} info={info} view={info ? view : null} onView={showView} pending={ops.length} />
       {error && (
         <div className="banner error" role="alert">
@@ -137,7 +159,20 @@ export function DiskEditor({
       )}
       {info && (
         <>
-          <div className="view-pane" hidden={view !== "sectors"}>
+          {opened.has("overview") && (
+            <div className="view-pane" hidden={view !== "overview"}>
+              <OverviewView
+                key={tableVersion}
+                sourceId={info.id}
+                sectorSize={info.sectorSize}
+                isImage={isImage}
+                windows={windows}
+                onGo={showView}
+                onShowInSectors={(offset) => showInHex(offset, info.sectorSize)}
+              />
+            </div>
+          )}
+          <div className="view-pane" hidden={view !== "hex"}>
             <div className="toolbar">
               <GoTo info={info} onGo={(offset) => reveal(offset, null)} />
               <Search
@@ -192,14 +227,6 @@ export function DiskEditor({
                     sourceId={info.id}
                     sectorSize={info.sectorSize}
                     onJump={(offset) => reveal(offset, { start: offset, length: info.sectorSize })}
-                    onRestore={(op, needsTable) => {
-                      setOps((current) => {
-                        const initialized = current.some((o) => o.op === "initialize");
-                        const init: Operation[] = needsTable && !initialized ? [{ op: "initialize", style: "mbr" }] : [];
-                        return [...current, ...init, op];
-                      });
-                      showView("disk");
-                    }}
                   />
                 </div>
                 <div className="panel-body" hidden={tab !== "bookmarks"}>
@@ -214,8 +241,8 @@ export function DiskEditor({
             </div>
             <CursorInfo info={info} cursor={cursor} data={data} selection={selection} status={status} />
           </div>
-          {diskOpened && (
-            <div className="view-pane" hidden={view !== "disk"}>
+          {opened.has("partitions") && (
+            <div className="view-pane" hidden={view !== "partitions"}>
               <DiskView
                 sourceId={info.id}
                 sourceName={info.name}
@@ -223,14 +250,15 @@ export function DiskEditor({
                 ops={ops}
                 onOps={setOps}
                 onTableChanged={() => setTableVersion((v) => v + 1)}
-                onShowInSectors={(offset) => {
-                  setView("sectors");
-                  reveal(offset, { start: offset, length: info.sectorSize });
+                onShowInSectors={(offset) => showInHex(offset, info.sectorSize)}
+                onCopyPartition={(startLba) => {
+                  setBackup((current) => ({ task: "partition", startLba, nonce: (current?.nonce ?? 0) + 1 }));
+                  showView("backup");
                 }}
               />
             </div>
           )}
-          {filesOpened && (
+          {opened.has("files") && (
             <div className="view-pane" hidden={view !== "files"}>
               <FileBrowser
                 key={tableVersion}
@@ -239,42 +267,62 @@ export function DiskEditor({
                 scan={scan}
                 raw={raw}
                 request={browse}
-                onShowInSectors={(offset, length) => {
-                  setView("sectors");
-                  reveal(offset, { start: offset, length: Math.max(1, Math.min(length, info.size - offset)) });
-                }}
+                onShowInSectors={(offset, length) =>
+                  showInHex(offset, Math.max(1, Math.min(length, info.size - offset)))
+                }
               />
             </div>
           )}
-          {scanOpened && (
-            <div className="view-pane" hidden={view !== "scan"}>
-              <ScanView
+          {opened.has("recover") && (
+            <div className="view-pane" hidden={view !== "recover"}>
+              <RecoverView
                 sourceId={info.id}
                 sectorSize={info.sectorSize}
-                status={scan}
-                onStatus={setScan}
+                scan={scan}
+                onScan={setScan}
                 raw={raw}
                 onRaw={setRaw}
-
                 onBrowse={(key) => {
                   setBrowse((current) => ({ key, nonce: (current?.nonce ?? 0) + 1 }));
                   showView("files");
                 }}
-                onShowInSectors={(offset) => {
-                  setView("sectors");
-                  reveal(offset, { start: offset, length: info.sectorSize });
+                onShowInSectors={(offset) => showInHex(offset, info.sectorSize)}
+                onRestore={(op, needsTable) => {
+                  setOps((current) => {
+                    const initialized = current.some((o) => o.op === "initialize");
+                    const init: Operation[] = needsTable && !initialized ? [{ op: "initialize", style: "mbr" }] : [];
+                    return [...current, ...init, op];
+                  });
+                  showView("partitions");
                 }}
+                onGo={showView}
               />
             </div>
           )}
-          {copyOpened && (
-            <div className="view-pane" hidden={view !== "copy"}>
-              <CopyView
+          {opened.has("backup") && (
+            <div className="view-pane" hidden={view !== "backup"}>
+              <BackupView
                 sourceId={info.id}
                 sourceName={info.name}
                 size={info.size}
+                sectorSize={info.sectorSize}
+                isImage={isImage}
+                windows={windows}
+                request={backup}
+                blocked={null}
                 onOpenImage={onOpenImage}
                 onRestartAsAdmin={onRestartAsAdmin}
+              />
+            </div>
+          )}
+          {opened.has("health") && (
+            <div className="view-pane" hidden={view !== "health"}>
+              <HealthView
+                key={tableVersion}
+                sourceId={info.id}
+                sectorSize={info.sectorSize}
+                isImage={isImage}
+                onShowInSectors={(offset) => showInHex(offset, info.sectorSize)}
               />
             </div>
           )}
@@ -298,56 +346,43 @@ type HeaderProps = {
 function EditorHeader({ title, subtitle, info, view, onView, pending }: HeaderProps) {
   return (
     <header className="view-header">
-      <div>
+      <div className="view-title">
         <h1>{title}</h1>
         {subtitle && (
-          <p className="muted view-subtitle" title={subtitle}>
+          <span className="muted view-subtitle" title={subtitle}>
             {subtitle}
-          </p>
-        )}
-      </div>
-      <div className="view-header-right">
-        {view && (
-          <div className="view-switch" role="tablist" aria-label="View">
-            <button role="tab" aria-selected={view === "sectors"} onClick={() => onView("sectors")}>
-              Sectors
-            </button>
-            <button role="tab" aria-selected={view === "disk"} onClick={() => onView("disk")}>
-              Disk
-            </button>
-            <button role="tab" aria-selected={view === "files"} onClick={() => onView("files")}>
-              Files
-            </button>
-            <button role="tab" aria-selected={view === "scan"} onClick={() => onView("scan")}>
-              Scan
-            </button>
-            <button role="tab" aria-selected={view === "copy"} onClick={() => onView("copy")}>
-              Copy
-            </button>
-
-          </div>
+          </span>
         )}
         {info && (
-          <p className="muted view-size">
+          <span className="muted view-size">
             {formatSize(info.size)} · {formatNumber(info.sectorCount)} sectors of {info.sectorSize} bytes
-          </p>
+          </span>
         )}
-        {pending > 0 ? (
-          <span
+        {pending > 0 && (
+          <button
             className="badge pending-badge"
-            title="Partition table changes are waiting in the Disk view. Nothing is written until you apply them and type the disk's name."
+            title="Partition table changes are waiting in Partitions. Nothing is written until you apply them and type the disk's name."
+            onClick={() => onView("partitions")}
           >
             {pending} change{pending === 1 ? "" : "s"} not written
-          </span>
-        ) : (
-          <span
-            className="badge"
-            title="DataReco writes only when you say so: partition table changes once you apply them, formatting, wiping, moving and resizing partitions, and copies onto another disk, each after you type the disk's name."
-          >
-            Read-only
-          </span>
+          </button>
         )}
       </div>
+      {view && (
+        <div className="tab-row" role="tablist" aria-label={title}>
+          {TABS.map((tab, i) => (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={view === tab}
+              title={`${TAB_NAMES[tab]} (Ctrl+${i + 1})`}
+              onClick={() => onView(tab)}
+            >
+              {TAB_NAMES[tab]}
+            </button>
+          ))}
+        </div>
+      )}
     </header>
   );
 }
@@ -386,6 +421,7 @@ function GoTo({ info, onGo }: { info: SourceInfo; onGo: (offset: number) => void
         placeholder={mode === "sector" ? "e.g. 2048" : "e.g. 0x100000"}
         spellCheck={false}
         aria-label={mode === "sector" ? "Sector number" : "Byte offset"}
+        data-focus="goto"
         title={invalid ? "Not a number on this disk (decimal, or hex starting with 0x)" : undefined}
       />
       <button type="submit">Go</button>
@@ -465,6 +501,7 @@ function Search({ info, cursor, onFound, onStatus }: SearchProps) {
         placeholder={mode === "hex" ? "e.g. 55 AA" : "e.g. NTFS"}
         spellCheck={false}
         aria-label="Search for"
+        data-focus="find"
       />
       <label className="checkbox">
         <input

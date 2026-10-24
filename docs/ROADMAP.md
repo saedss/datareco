@@ -71,6 +71,18 @@ writing NTFS or FAT structures file by file), dynamic disks, disk clean-up and a
 moving, password reset, and write speed tests (writing a test file could overwrite
 deleted files someone wants back).
 
+### Desktop app redesign
+
+The desktop app grew a view per phase (Sectors, Disk, Files, Scan, Copy), which
+left words like "Copy" and "Scan" doing several jobs. The redesign organizes it
+by task, in three releases:
+
+| Release | Delivers | Status |
+|---|---|---|
+| R1. The shell | A menu bar (File, Edit, View, Disk, Partition, Recovery, Tools, Help) with shortcuts, and command search (Ctrl+K) over the same actions. The sidebar as a tree: each disk with its partitions, the Windows disk marked, other drives and image files. Tabs per disk: Overview, Browse files, Recover data, Partitions, Back up & clone, Health, Hex editor (Ctrl+1 to Ctrl+7). An Activity panel (Ctrl+J) for everything that runs, on every open disk, with pause and stop; disks stay open while you look at another. A status bar. Plain names throughout ("Deep search", "Find files by type", "Create a disk image") | Done |
+| R2. Guidance | Home with task cards ("Get deleted files back", "Back up a failing drive", "Move Windows to a new disk", …) that open the right tab with the right choices; guided steps for the riskier tasks; built-in help (F1) with a glossary; a first-run tour | |
+| R3. New tools | Restoring and verifying images; settings (units, where backups and journals go); history of what was done to each disk; filters for recovery results (type, size, date); a report-a-problem bundle | |
+
 Note on Phase 5 and `ntfs-reformatted`: the full scan finds the old NTFS volume
 (from its backup boot sector) and opens it, but very likely with no files in it. On
 that 48 MiB test volume, mkntfs puts the MFT 16 KiB in, inside the area the new

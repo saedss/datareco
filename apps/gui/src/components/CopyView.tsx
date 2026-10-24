@@ -12,12 +12,15 @@ import {
   toCommandError,
 } from "../api";
 import { formatSize } from "../format";
+import { useActivity } from "../activity";
 
 type Props = {
   sourceId: string;
   /** "Disk 1", for messages. */
   sourceName: string;
   size: number;
+  /** Into an image file, or onto another disk (erasing it). */
+  kind: "image" | "disk";
   /** Opens a finished image file in the editor. */
   onOpenImage: (path: string) => void;
   onRestartAsAdmin: () => void;
@@ -26,9 +29,9 @@ type Props = {
 const IMAGE_FILES = [{ name: "Disk images", extensions: ["img"] }];
 const MAP_FILES = [{ name: "Copy maps", extensions: ["map"] }];
 
-/** Copies the source into an image file or onto another disk, with a map to carry on later. */
-export function CopyView({ sourceId, sourceName, size, onOpenImage, onRestartAsAdmin }: Props) {
-  const [kind, setKind] = useState<"image" | "disk">("image");
+/** Copies every sector of the source into an image file or onto another
+ *  disk, in passes made for failing drives, with a map to carry on later. */
+export function CopyView({ sourceId, sourceName, size, kind, onOpenImage, onRestartAsAdmin }: Props) {
   const [imagePath, setImagePath] = useState("");
   const [diskNumber, setDiskNumber] = useState<number | null>(null);
   const [mapPath, setMapPath] = useState("");
@@ -58,6 +61,14 @@ export function CopyView({ sourceId, sourceName, size, onOpenImage, onRestartAsA
   useEffect(() => {
     if (kind === "disk" && !choices) loadChoices();
   }, [kind]);
+
+  // Closing the disk pauses the copy; its map is saved, to carry on later.
+  useEffect(
+    () => () => {
+      stopping.current = true;
+    },
+    [],
+  );
 
   const target: CopyTarget | null =
     kind === "image"
@@ -117,16 +128,21 @@ export function CopyView({ sourceId, sourceName, size, onOpenImage, onRestartAsA
     changed();
     try {
       const info = await api.readCopyMap(path);
+      const from = parseTarget(info.target);
+      if (from && from.kind !== kind) {
+        setError({
+          kind: "refused",
+          message:
+            from.kind === "image"
+              ? "This map is of a copy into an image file: carry it on from Create a disk image."
+              : "This map is of a copy onto a disk: carry it on from the copy onto a disk.",
+        });
+        return;
+      }
       setMapPath(path);
       setResume(info);
-      const from = parseTarget(info.target);
-      if (from?.kind === "image") {
-        setKind("image");
-        setImagePath(from.path);
-      } else if (from?.kind === "disk") {
-        setKind("disk");
-        setDiskNumber(from.number);
-      }
+      if (from?.kind === "image") setImagePath(from.path);
+      else if (from?.kind === "disk") setDiskNumber(from.number);
     } catch (e) {
       setError(toCommandError(e));
     }
@@ -188,59 +204,48 @@ export function CopyView({ sourceId, sourceName, size, onOpenImage, onRestartAsA
   const picture = status?.picture ?? resume?.picture ?? null;
   const finished = progress?.finished ?? resume?.finished ?? false;
   const begun = totals !== null && (totals.copied > 0 || totals.bad > 0);
-  const startLabel = !begun ? "Start copy" : finished ? "Try unreadable sectors again" : "Carry on";
+  const startLabel = !begun
+    ? kind === "image"
+      ? "Create the image"
+      : "Start copying"
+    : finished
+      ? "Try unreadable sectors again"
+      : "Carry on";
   const canStart = !running && target !== null && mapPath !== "" && !(finished && retries === 0);
+
+  useActivity(
+    `${sourceId}:copy-${kind}`,
+    sourceId,
+    totals && (status || running)
+      ? {
+          label:
+            kind === "image"
+              ? `Image into ${imagePath.split(/[\\/]/).pop() ?? "a file"}`
+              : `Copy onto Disk ${diskNumber ?? "?"}`,
+          detail:
+            `${formatSize(totals.copied)} of ${formatSize(size)}` +
+            (totals.bad > 0 ? ` · ${formatSize(totals.bad)} unreadable` : ""),
+          percent: size > 0 ? Math.round((totals.copied / size) * 1000) / 10 : null,
+          state: error ? "failed" : running ? "running" : finished ? "finished" : "paused",
+          view: "backup",
+        }
+      : null,
+    {
+      pause: () => (stopping.current = true),
+      resume: start,
+    },
+  );
 
   return (
     <div className="scan-view copy-view">
-      {!status && !resume && (
-        <div className="notice">
-          <h2>Copy this {sourceId.startsWith("image:") ? "image" : "disk"}</h2>
-          <p>
-            Copies every sector into an image file or onto another disk, in passes made for failing drives: a fast
-            first pass that skips past trouble, then backwards, then the edges and insides of what failed, then
-            retries. Work on the copy instead of the drive: each read of a failing drive can be its last.
-          </p>
-          {sourceId.startsWith("volume:") && (
-            <p className="warning-text">
-              Programs can change a volume while it's copied, so the copy may not be consistent. Copy it while
-              nothing uses it, or copy its whole disk.
-            </p>
-          )}
-        </div>
+      {!status && !resume && sourceId.startsWith("volume:") && (
+        <p className="warning-text">
+          Programs can change a volume while it's copied, so the copy may not be consistent. Copy it while nothing uses
+          it, or copy its whole disk.
+        </p>
       )}
 
       <fieldset className="copy-form" disabled={running}>
-        <div className="copy-row">
-          <span className="copy-label">Copy to</span>
-          <label>
-            <input
-              type="radio"
-              name="copy-kind"
-              checked={kind === "image"}
-              onChange={() => {
-                setKind("image");
-                changed();
-                setMapPath(imagePath ? mapFor(imagePath) : "");
-              }}
-            />{" "}
-            An image file
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="copy-kind"
-              checked={kind === "disk"}
-              onChange={() => {
-                setKind("disk");
-                changed();
-                setMapPath("");
-              }}
-            />{" "}
-            Another disk, erasing it
-          </label>
-        </div>
-
         {kind === "image" ? (
           <div className="copy-row">
             <span className="copy-label">Image file</span>
@@ -297,7 +302,7 @@ export function CopyView({ sourceId, sourceName, size, onOpenImage, onRestartAsA
         </p>
 
         <div className="copy-row">
-          <span className="copy-label">Failing drive</span>
+          <span className="copy-label">If it's failing</span>
           <label>
             <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} /> Skip past read errors
             first, and come back to them
